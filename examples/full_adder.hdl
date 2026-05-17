@@ -1,0 +1,16 @@
+// 1-bit full adder, the building block of the 8-bit ripple-carry chain.
+//
+//   sum  = a XOR b XOR cin
+//   cout = (a AND b) OR ((a XOR b) AND cin)
+//
+// Used by the US3 end-to-end test as a smaller, faster-routing
+// reference design than the full 8-bit chain.
+module full_adder(input a, input b, input cin, output sum, output cout);
+    wire ab, ab_cin, ab_and;
+
+    xor x1(.A(a), .B(b), .Y(ab));
+    xor x2(.A(ab), .B(cin), .Y(sum));
+    and a1(.A(a), .B(b), .Y(ab_and));
+    and a2(.A(ab), .B(cin), .Y(ab_cin));
+    or  o1(.A(ab_and), .B(ab_cin), .Y(cout));
+endmodule

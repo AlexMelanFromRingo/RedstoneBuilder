@@ -1,0 +1,5 @@
+module dff_demo(input d, input clk, output q);
+    always @(posedge clk) begin
+        dtrigger ff(.D(d), .CLK(clk), .Q(q));
+    end
+endmodule

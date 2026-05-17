@@ -1,0 +1,3 @@
+module bad(input a, output y);
+    and g1(.A(a), .B(c), .Y(y));
+endmodule

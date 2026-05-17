@@ -1,0 +1,1 @@
+../specs/001-hdl-compiler-cli/contracts/hdl-grammar.md

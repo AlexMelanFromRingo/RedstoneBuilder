@@ -1,0 +1,31 @@
+[package]
+name = "rb-parser"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "RedstoneBuilder HDL parser (pest PEG grammar) and AST."
+keywords = ["minecraft", "redstone", "parser", "hdl", "verilog"]
+categories = ["compilers", "parsing"]
+
+[dependencies]
+rb-core = { workspace = true }
+pest = { workspace = true }
+pest_derive = { workspace = true }
+thiserror = { workspace = true }
+miette = { workspace = true }
+serde = { workspace = true }
+smol_str = { workspace = true }
+
+[dev-dependencies]
+miette = { workspace = true, features = ["fancy"] }
+criterion = { workspace = true }
+
+[[bench]]
+name = "parse_10k_lines"
+harness = false
+
+[lints]
+workspace = true

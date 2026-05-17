@@ -1,0 +1,30 @@
+[package]
+name = "rb-synthesis"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "RedstoneBuilder logic synthesis, placement, and 3D routing."
+keywords = ["minecraft", "redstone", "compiler", "place-and-route"]
+categories = ["compilers", "algorithms"]
+
+[dependencies]
+rb-core = { workspace = true }
+rb-parser = { workspace = true }
+petgraph = { workspace = true }
+rand_chacha = { workspace = true }
+thiserror = { workspace = true }
+miette = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "route_1k_gates"
+harness = false
+
+[lints]
+workspace = true

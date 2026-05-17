@@ -1,0 +1,17 @@
+[package]
+name = "rb-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "RedstoneBuilder shared types: positions, source spans, gate kinds, block catalogue."
+keywords = ["minecraft", "redstone", "compiler", "hdl"]
+categories = ["compilers", "data-structures"]
+
+[dependencies]
+serde = { workspace = true }
+
+[lints]
+workspace = true

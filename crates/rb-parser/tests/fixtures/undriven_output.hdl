@@ -1,0 +1,3 @@
+module bad(input a, output y);
+    not g1(.A(a), .Y(a));
+endmodule

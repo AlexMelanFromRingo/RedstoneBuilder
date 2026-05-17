@@ -1,0 +1,5 @@
+module mem_demo(input data, input we, input clk, output q);
+    always @(posedge clk) begin
+        memcell m(.DATA(data), .WRITE(we), .Q(q));
+    end
+endmodule

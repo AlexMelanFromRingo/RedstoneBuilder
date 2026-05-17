@@ -1,0 +1,30 @@
+[package]
+name = "rb-nbt"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "RedstoneBuilder Litematica .litematic NBT writer."
+keywords = ["minecraft", "nbt", "litematica", "schematic"]
+categories = ["encoding", "game-development"]
+
+[dependencies]
+rb-core = { workspace = true }
+fastnbt = { workspace = true }
+flate2 = { workspace = true }
+thiserror = { workspace = true }
+miette = { workspace = true }
+serde = { workspace = true }
+smol_str = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "serialize_256_cube"
+harness = false
+
+[lints]
+workspace = true

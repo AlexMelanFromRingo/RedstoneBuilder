@@ -1,0 +1,80 @@
+// 8-bit ripple-carry adder.
+//
+//   Inputs : a0..a7, b0..b7, cin
+//   Outputs: s0..s7, cout
+//
+// Each bit is a full adder built from 2× XOR + 2× AND + 1× OR.
+//   sum_i  = a_i XOR b_i XOR carry_i
+//   carry_{i+1} = (a_i AND b_i) OR ((a_i XOR b_i) AND carry_i)
+//
+// Carry chain: carry_0 = cin; carry_8 = cout.
+//
+// Reference design for SC-005 (≈ 50 gates compile under 10 s).
+module ripple_adder_8bit(
+    input a0, input a1, input a2, input a3, input a4, input a5, input a6, input a7,
+    input b0, input b1, input b2, input b3, input b4, input b5, input b6, input b7,
+    input cin,
+    output s0, output s1, output s2, output s3, output s4, output s5, output s6, output s7,
+    output cout
+);
+    wire ab0, ab1, ab2, ab3, ab4, ab5, ab6, ab7;
+    wire pc1, pc2, pc3, pc4, pc5, pc6, pc7, pc8;
+    wire c0g, c1g, c2g, c3g, c4g, c5g, c6g, c7g;
+    wire c1, c2, c3, c4, c5, c6, c7;
+
+    // bit 0
+    xor x0a(.A(a0), .B(b0), .Y(ab0));
+    xor x0b(.A(ab0), .B(cin), .Y(s0));
+    and a0g(.A(a0), .B(b0), .Y(c0g));
+    and p0(.A(ab0), .B(cin), .Y(pc1));
+    or  c1o(.A(c0g), .B(pc1), .Y(c1));
+
+    // bit 1
+    xor x1a(.A(a1), .B(b1), .Y(ab1));
+    xor x1b(.A(ab1), .B(c1), .Y(s1));
+    and a1g(.A(a1), .B(b1), .Y(c1g));
+    and p1(.A(ab1), .B(c1), .Y(pc2));
+    or  c2o(.A(c1g), .B(pc2), .Y(c2));
+
+    // bit 2
+    xor x2a(.A(a2), .B(b2), .Y(ab2));
+    xor x2b(.A(ab2), .B(c2), .Y(s2));
+    and a2g(.A(a2), .B(b2), .Y(c2g));
+    and p2(.A(ab2), .B(c2), .Y(pc3));
+    or  c3o(.A(c2g), .B(pc3), .Y(c3));
+
+    // bit 3
+    xor x3a(.A(a3), .B(b3), .Y(ab3));
+    xor x3b(.A(ab3), .B(c3), .Y(s3));
+    and a3g(.A(a3), .B(b3), .Y(c3g));
+    and p3(.A(ab3), .B(c3), .Y(pc4));
+    or  c4o(.A(c3g), .B(pc4), .Y(c4));
+
+    // bit 4
+    xor x4a(.A(a4), .B(b4), .Y(ab4));
+    xor x4b(.A(ab4), .B(c4), .Y(s4));
+    and a4g(.A(a4), .B(b4), .Y(c4g));
+    and p4(.A(ab4), .B(c4), .Y(pc5));
+    or  c5o(.A(c4g), .B(pc5), .Y(c5));
+
+    // bit 5
+    xor x5a(.A(a5), .B(b5), .Y(ab5));
+    xor x5b(.A(ab5), .B(c5), .Y(s5));
+    and a5g(.A(a5), .B(b5), .Y(c5g));
+    and p5(.A(ab5), .B(c5), .Y(pc6));
+    or  c6o(.A(c5g), .B(pc6), .Y(c6));
+
+    // bit 6
+    xor x6a(.A(a6), .B(b6), .Y(ab6));
+    xor x6b(.A(ab6), .B(c6), .Y(s6));
+    and a6g(.A(a6), .B(b6), .Y(c6g));
+    and p6(.A(ab6), .B(c6), .Y(pc7));
+    or  c7o(.A(c6g), .B(pc7), .Y(c7));
+
+    // bit 7
+    xor x7a(.A(a7), .B(b7), .Y(ab7));
+    xor x7b(.A(ab7), .B(c7), .Y(s7));
+    and a7g(.A(a7), .B(b7), .Y(c7g));
+    and p7(.A(ab7), .B(c7), .Y(pc8));
+    or  c8o(.A(c7g), .B(pc8), .Y(cout));
+endmodule

@@ -1,0 +1,15 @@
+// Half-adder: a + b → (sum, carry).
+//
+// sum   = a XOR b
+// carry = a AND b
+//
+// Truth table:
+//   a b | sum carry
+//   0 0 |  0   0
+//   0 1 |  1   0
+//   1 0 |  1   0
+//   1 1 |  0   1
+module half_adder(input a, input b, output sum, output carry);
+    xor x1(.A(a), .B(b), .Y(sum));
+    and a1(.A(a), .B(b), .Y(carry));
+endmodule
