@@ -67,7 +67,7 @@ fn build_module(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> Modu
             Rule::port_list => {
                 for port_pair in inner.into_inner() {
                     if matches!(port_pair.as_rule(), Rule::port_decl) {
-                        ports.push(build_port(port_pair, file, source));
+                        ports.extend(build_ports(port_pair, file, source));
                     }
                 }
             }
@@ -99,10 +99,14 @@ fn build_module(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> Modu
     }
 }
 
-fn build_port(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> Port {
+/// Build the port(s) for one `port_decl`. A scalar declaration yields
+/// exactly one [`Port`]; a bus declaration (`input [3:0] a`) desugars
+/// into one [`Port`] per bit, named `a[0]..a[3]`.
+fn build_ports(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> Vec<Port> {
     let span = make_span(&pair, file, source);
     let mut dir = PortDir::Input;
     let mut kind = SignalKind::Boolean;
+    let mut bus: Option<(u32, u32)> = None;
     let mut name = placeholder_ident("<missing>", file, source, &span);
 
     for inner in pair.into_inner() {
@@ -123,6 +127,9 @@ fn build_port(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> Port {
                     }
                 }
             }
+            Rule::bus_spec => {
+                bus = Some(parse_bus_spec(&inner));
+            }
             Rule::ident => {
                 name = make_ident(inner, file, source);
             }
@@ -130,41 +137,84 @@ fn build_port(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> Port {
         }
     }
 
-    Port {
-        name,
-        dir,
-        kind,
-        span,
-    }
+    expand_bus_names(&name, bus)
+        .into_iter()
+        .map(|bit_name| Port {
+            name: bit_name,
+            dir,
+            kind,
+            span: span.clone(),
+        })
+        .collect()
 }
 
 fn build_wires(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> Vec<WireDecl> {
-    // First detect the wire_kind (looks for `kw_analog` token inside the
-    // wire_kind rule). `wire X;` → Boolean (default); `analog wire X;`
-    // → AnalogStrength.
+    // Detect the wire_kind (`kw_analog` token) and an optional bus_spec.
+    // `wire X;` → Boolean scalar; `analog wire X;` → AnalogStrength;
+    // `wire [3:0] X;` → 4 scalar nets X[0]..X[3].
     let mut kind = SignalKind::Boolean;
+    let mut bus: Option<(u32, u32)> = None;
     for inner in pair.clone().into_inner() {
-        if matches!(inner.as_rule(), Rule::wire_kind) {
-            for k in inner.into_inner() {
-                if matches!(k.as_rule(), Rule::kw_analog) {
-                    kind = SignalKind::AnalogStrength;
+        match inner.as_rule() {
+            Rule::wire_kind => {
+                for k in inner.into_inner() {
+                    if matches!(k.as_rule(), Rule::kw_analog) {
+                        kind = SignalKind::AnalogStrength;
+                    }
                 }
             }
+            Rule::bus_spec => {
+                bus = Some(parse_bus_spec(&inner));
+            }
+            _ => {}
         }
     }
 
-    pair.into_inner()
+    let mut out: Vec<WireDecl> = Vec::new();
+    for p in pair
+        .into_inner()
         .filter(|p| matches!(p.as_rule(), Rule::ident))
-        .map(|p| {
-            let span = make_span(&p, file, source);
-            let id = make_ident(p, file, source);
-            WireDecl {
-                name: id,
+    {
+        let id = make_ident(p, file, source);
+        for bit_name in expand_bus_names(&id, bus) {
+            let span = bit_name.span.clone();
+            out.push(WireDecl {
+                name: bit_name,
                 kind,
                 span,
-            }
-        })
-        .collect()
+            });
+        }
+    }
+    out
+}
+
+/// Parse a `bus_spec` rule (`[msb:lsb]`) into an inclusive `(lo, hi)`
+/// pair. Either endianness is accepted — the smaller endpoint is `lo`.
+fn parse_bus_spec(pair: &Pair<'_, Rule>) -> (u32, u32) {
+    let mut nums = pair
+        .clone()
+        .into_inner()
+        .filter(|p| matches!(p.as_rule(), Rule::integer_lit))
+        .filter_map(|p| p.as_str().parse::<u32>().ok());
+    let a = nums.next().unwrap_or(0);
+    let b = nums.next().unwrap_or(0);
+    (a.min(b), a.max(b))
+}
+
+/// Expand a (possibly bus) base name into the concrete per-bit net
+/// identifiers. A scalar (`bus == None`) yields just `[base]`; a bus
+/// yields `base[lo]..base[hi]`. Each synthesised identifier keeps the
+/// base identifier's span for diagnostics.
+fn expand_bus_names(base: &Ident, bus: Option<(u32, u32)>) -> Vec<Ident> {
+    match bus {
+        None => vec![base.clone()],
+        Some((lo, hi)) => (lo..=hi)
+            .map(|i| Ident {
+                text: SmolStr::new(format!("{}[{i}]", base.as_str())),
+                span: base.span.clone(),
+            })
+            .collect(),
+    }
 }
 
 fn build_gate_inst(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> GateInst {
@@ -400,17 +450,25 @@ fn build_conn(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> Connec
                 }
             }
             Rule::conn_arg => {
-                // The conn_arg wraps either an ident or an integer_lit.
-                // For integer_lit, we synthesise an Ident whose text is
-                // the literal — downstream code (e.g. repeater_delay
-                // extraction) parses it as a u8.
+                // conn_arg wraps either an integer_lit or a net_ref.
+                // integer_lit → an Ident whose text is the literal
+                // (downstream parses it, e.g. repeater .DELAY(N)).
+                // net_ref → a scalar net name, with a bit index folded
+                // into the name as `bus[i]`.
                 if let Some(arg) = inner.into_inner().next() {
-                    let span = make_span(&arg, file, source);
-                    let text = arg.as_str();
-                    net = Some(Ident {
-                        text: SmolStr::new(text),
-                        span,
-                    });
+                    match arg.as_rule() {
+                        Rule::integer_lit => {
+                            let span = make_span(&arg, file, source);
+                            net = Some(Ident {
+                                text: SmolStr::new(arg.as_str()),
+                                span,
+                            });
+                        }
+                        Rule::net_ref => {
+                            net = Some(build_net_ref(arg, file, source));
+                        }
+                        _ => {}
+                    }
                 }
             }
             _ => {}
@@ -422,6 +480,35 @@ fn build_conn(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> Connec
         net: net.unwrap_or_else(|| placeholder_ident("<missing>", file, source, &span)),
         span,
     }
+}
+
+/// Build a net reference (`net_ref` rule): a bare ident or a
+/// bit-indexed bus element. A bit index is folded into the net name so
+/// the rest of the compiler sees a flat scalar net `bus[i]` — matching
+/// the per-bit names [`expand_bus_names`] produces for declarations.
+fn build_net_ref(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> Ident {
+    let span = make_span(&pair, file, source);
+    let mut base: Option<SmolStr> = None;
+    let mut bit: Option<u32> = None;
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::ident => base = Some(SmolStr::new(inner.as_str())),
+            Rule::bit_index => {
+                for bi in inner.into_inner() {
+                    if matches!(bi.as_rule(), Rule::integer_lit) {
+                        bit = bi.as_str().parse::<u32>().ok();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let base = base.unwrap_or_else(|| SmolStr::new("<missing>"));
+    let text = match bit {
+        Some(b) => SmolStr::new(format!("{base}[{b}]")),
+        None => base,
+    };
+    Ident { text, span }
 }
 
 fn make_ident(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> Ident {

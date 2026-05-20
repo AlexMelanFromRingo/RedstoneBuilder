@@ -1,0 +1,10 @@
+// V3.P2 bus-syntax fixture: multi-bit ports + wires + bit indexing.
+// A 2-bit bitwise AND. `wire [1:0] x` desugars to x[0], x[1].
+module bus_and2(
+    input [1:0] a,
+    input [1:0] b,
+    output [1:0] y
+);
+    and g0(.A(a[0]), .B(b[0]), .Y(y[0]));
+    and g1(.A(a[1]), .B(b[1]), .Y(y[1]));
+endmodule

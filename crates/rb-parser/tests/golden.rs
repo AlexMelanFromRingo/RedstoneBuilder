@@ -204,3 +204,48 @@ fn wire_decls_with_multiple_names_expand() {
     assert_eq!(module.wires[1].name.as_str(), "w2");
     assert_eq!(module.wires[2].name.as_str(), "w3");
 }
+
+#[test]
+fn bus_ports_and_wires_desugar_into_per_bit_nets() {
+    let (src, path) = read_fixture("bus_decl.hdl");
+    let module = parse(&src, &path).expect("parse bus_decl.hdl");
+
+    // `input [1:0] a`, `input [1:0] b`, `output [1:0] y` → 6 scalar ports.
+    assert_eq!(module.ports.len(), 6, "ports: {:?}", module.ports);
+    let port_names: Vec<&str> = module.ports.iter().map(|p| p.name.as_str()).collect();
+    assert!(port_names.contains(&"a[0]"));
+    assert!(port_names.contains(&"a[1]"));
+    assert!(port_names.contains(&"y[0]"));
+    assert!(port_names.contains(&"y[1]"));
+
+    // Bit-indexed connections resolve to flat scalar net names.
+    let g0 = &module.instances[0];
+    let a_conn = g0
+        .connections
+        .iter()
+        .find(|c| c.port.as_str().eq_ignore_ascii_case("A"))
+        .expect("g0 has .A");
+    assert_eq!(a_conn.net.as_str(), "a[0]");
+
+    validate(&module, &src).expect("bus_decl.hdl validates clean");
+}
+
+#[test]
+fn bus_wire_decl_expands_to_width() {
+    let src = r#"
+        module busw(input x, output y);
+            wire [3:0] bus;
+            and g(.A(x), .B(x), .Y(y));
+        endmodule
+    "#;
+    let path = std::path::PathBuf::from("busw.hdl");
+    let module = parse(src, &path).expect("parses");
+    // `wire [3:0] bus;` → bus[0]..bus[3].
+    let bus_nets: Vec<&str> = module
+        .wires
+        .iter()
+        .map(|w| w.name.as_str())
+        .filter(|n| n.starts_with("bus["))
+        .collect();
+    assert_eq!(bus_nets.len(), 4, "got {bus_nets:?}");
+}
