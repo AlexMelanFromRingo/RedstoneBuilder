@@ -13,6 +13,7 @@ pub mod error;
 pub mod grid3d;
 pub mod lower;
 pub mod netlist;
+pub mod optimize;
 pub mod place;
 pub mod route;
 pub mod timing;
@@ -26,6 +27,7 @@ pub use lower::lower_xor_gates;
 pub use netlist::{
     build_netlist, EndpointRole, NetId, Netlist, NetlistEdge, NetlistGraph, NetlistNode,
 };
+pub use optimize::prune_dead_gates;
 pub use place::{
     place, place_simulated_annealing, place_with, PlaceConfig, PlacedCell, Placement, PlacerKind,
     SaConfig,

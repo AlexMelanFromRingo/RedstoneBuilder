@@ -184,6 +184,13 @@ pub fn run(cli: &Cli) -> Result<RunSummary, PipelineError> {
     let mut module = module;
     rb_synthesis::lower_xor_gates(&mut module);
 
+    // Optimiser pass: drop gates whose output can never reach a module
+    // output (combinational dead-code elimination).
+    let pruned = rb_synthesis::prune_dead_gates(&mut module);
+    if pruned > 0 && cli.verbose > 0 {
+        eprintln!("[info] dead-gate elimination removed {pruned} gate(s)");
+    }
+
     let netlist = build_netlist(&module).map_err(PipelineError::Synth)?;
     if let Some(path) = &cli.dump_netlist {
         write_json_dump(path, &netlist)?;
