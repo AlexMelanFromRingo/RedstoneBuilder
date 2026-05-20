@@ -41,7 +41,9 @@ fn bench(c: &mut Criterion) {
     let path = PathBuf::from("stress10k.hdl");
     let module = parse(&src, &path).expect("parse 10k");
     let netlist = build_netlist(&module).expect("netlist 10k");
-    let placement = place(&netlist, &PlaceConfig::DEFAULT).expect("place 10k");
+    // MAX_PERMISSIVE: a 10k-gate chain does not fit the 256³ default
+    // footprint — the bench measures routing, not footprint policy.
+    let placement = place(&netlist, &PlaceConfig::MAX_PERMISSIVE).expect("place 10k");
 
     let mut routes: Vec<(NetTag, rb_core::Pos3, rb_core::Pos3)> = Vec::new();
     for win in placement.cells.windows(2) {

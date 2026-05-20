@@ -28,8 +28,13 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # Run lib/bin/integration tests + compile examples. Benches are
+      # NOT run here: criterion benches execute their harness under
+      # `cargo test --all-targets`, and the heavy 10k-gate benches are
+      # manual/nightly only — they are merely compiled in the step
+      # below.
       - name: cargo test
-        run: cargo test --workspace --all-targets
+        run: cargo test --workspace --lib --bins --tests --examples
 
       - name: cargo bench --no-run
         run: cargo bench --workspace --no-run
