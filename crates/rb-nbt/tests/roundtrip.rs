@@ -114,6 +114,50 @@ fn palette_first_encounter_order_is_stable() {
 }
 
 #[test]
+fn v2_block_states_round_trip() {
+    let mut grid = BlockGrid::empty(Bbox3::from_corners(Pos3::new(0, 0, 0), Pos3::new(3, 0, 0)));
+    grid.insert(
+        Pos3::new(0, 0, 0),
+        block_state_for(BlockId::Observer, Some(Direction::South)),
+    );
+    grid.insert(
+        Pos3::new(1, 0, 0),
+        block_state_for(BlockId::TargetBlock, None),
+    );
+    grid.insert(Pos3::new(2, 0, 0), block_state_for(BlockId::Slab, None));
+    grid.insert(Pos3::new(3, 0, 0), block_state_for(BlockId::Glass, None));
+
+    let root = build_root(&grid, "v2_blocks", "round-trip");
+    let bytes = encode_to_bytes(&root).expect("encode");
+    let decoded = decode_from_bytes(&bytes).expect("decode");
+
+    let region = decoded.regions.get("main").expect("region");
+    let names: Vec<&str> = region
+        .block_state_palette
+        .iter()
+        .map(|s| s.name.as_str())
+        .collect();
+    assert!(names.contains(&"minecraft:observer"));
+    assert!(names.contains(&"minecraft:target"));
+    assert!(names.contains(&"minecraft:stone_slab"));
+    assert!(names.contains(&"minecraft:glass"));
+}
+
+#[test]
+fn override_property_patches_repeater_delay() {
+    use rb_nbt::override_property;
+    let mut state = block_state_for(BlockId::Repeater, Some(Direction::East));
+    assert_eq!(state.properties.get("delay").map(|s| s.as_str()), Some("1"));
+    override_property(&mut state, "delay", "3");
+    override_property(&mut state, "locked", "true");
+    assert_eq!(state.properties.get("delay").map(|s| s.as_str()), Some("3"));
+    assert_eq!(
+        state.properties.get("locked").map(|s| s.as_str()),
+        Some("true")
+    );
+}
+
+#[test]
 fn block_state_for_consistent_property_keys() {
     let r = block_state_for(BlockId::Repeater, Some(Direction::East));
     assert_eq!(r.name.as_str(), "minecraft:repeater");

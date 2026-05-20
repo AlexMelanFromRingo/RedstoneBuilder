@@ -78,3 +78,15 @@ fn full_adder_is_deterministic_across_10_runs() {
     let outputs = compile_n_times("full_adder.hdl", 10);
     assert_all_identical(&outputs, "full_adder.hdl");
 }
+
+#[test]
+fn analog_add_is_deterministic_across_5_runs() {
+    let outputs = compile_n_times("analog_add.hdl", 5);
+    assert_all_identical(&outputs, "analog_add.hdl");
+}
+
+#[test]
+fn monostable_is_deterministic_across_5_runs() {
+    let outputs = compile_n_times("monostable.hdl", 5);
+    assert_all_identical(&outputs, "monostable.hdl");
+}

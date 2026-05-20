@@ -1,0 +1,1 @@
+../specs/002-v2-analog-scale/contracts/hdl-grammar.md

@@ -1,0 +1,41 @@
+diff --git a/redhdl/assembly/assembly.py b/redhdl/assembly/assembly.py
+index 7e315ed..049d61d 100644
+--- a/redhdl/assembly/assembly.py
++++ b/redhdl/assembly/assembly.py
+@@ -338,11 +338,16 @@ def schematic_placement_from_netlist(
+ 
+     try:
+         return solution_schematic(placement), placement
+-    except BaseException:
+-        import pdb
+-
+-        pdb.set_trace()
+-        raise
++    except BaseException as exc:
++        # Non-interactive: surface the real exception instead of dropping
++        # into pdb. Original handler does `pdb.set_trace(); raise` which
++        # turns every assembly failure into a debugger session.
++        import traceback
++
++        traceback.print_exc()
++        raise RuntimeError(
++            f"solution_schematic failed: {type(exc).__name__}: {exc}"
++        ) from exc
+ 
+ 
+ def assembled_circuit_schem(
+diff --git a/redhdl/assembly/placement.py b/redhdl/assembly/placement.py
+index 9d5aa5b..064607c 100644
+--- a/redhdl/assembly/placement.py
++++ b/redhdl/assembly/placement.py
+@@ -355,7 +355,9 @@ def mutated_individual_placement(
+ 
+ 
+ def mutated_placement(placement: InstancePlacement) -> InstancePlacement:
+-    instances_to_tweak_count = max(len(placement) // 3, 2)
++    # For tiny designs (<2 instances), sample() raised
++    # "Sample larger than population". Clamp k to the actual count.
++    instances_to_tweak_count = min(max(len(placement) // 3, 2), len(placement))
+     instances_to_tweak = sample(list(placement.keys()), k=instances_to_tweak_count)
+ 
+     tweaked_placement = {

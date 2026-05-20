@@ -138,11 +138,51 @@ pub fn block_state_for(block: BlockId, facing: Option<Direction>) -> BlockState 
                 properties: props,
             }
         }
+        BlockId::Observer => {
+            let mut props = BTreeMap::new();
+            props.insert(
+                SmolStr::new("facing"),
+                face.unwrap_or_else(|| SmolStr::new("south")),
+            );
+            props.insert(SmolStr::new("powered"), SmolStr::new("false"));
+            BlockState {
+                name: SmolStr::new("minecraft:observer"),
+                properties: props,
+            }
+        }
+        BlockId::TargetBlock => {
+            let mut props = BTreeMap::new();
+            props.insert(SmolStr::new("power"), SmolStr::new("0"));
+            BlockState {
+                name: SmolStr::new("minecraft:target"),
+                properties: props,
+            }
+        }
+        BlockId::Slab => {
+            let mut props = BTreeMap::new();
+            props.insert(SmolStr::new("type"), SmolStr::new("bottom"));
+            props.insert(SmolStr::new("waterlogged"), SmolStr::new("false"));
+            BlockState {
+                name: SmolStr::new("minecraft:stone_slab"),
+                properties: props,
+            }
+        }
+        BlockId::Glass => BlockState::simple("minecraft:glass"),
         // Forward-compat: any future BlockId variant should be added
         // here. Until then we render it as air so we never panic on
         // input we don't recognise.
         _ => BlockState::simple("minecraft:air"),
     }
+}
+
+/// v2 helper: patch a [`BlockState`]'s mutable properties after
+/// `block_state_for` returns. Used by the pipeline to set per-instance
+/// values for `minecraft:repeater.delay`, `minecraft:repeater.locked`,
+/// and `minecraft:comparator.mode` based on the user's HDL attributes.
+pub fn override_property(state: &mut BlockState, key: &str, value: &str) {
+    state
+        .properties
+        .insert(SmolStr::new(key), SmolStr::new(value));
 }
 
 /// Palette builder with first-encounter index assignment.

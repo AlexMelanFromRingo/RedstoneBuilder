@@ -1,0 +1,27 @@
+[package]
+name = "rb-stubs"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "RedstoneBuilder v3 stub library: load hand-built .litematic / .schem schematics as composable gate primitives."
+keywords = ["minecraft", "redstone", "compiler", "schematic"]
+categories = ["compilers", "parser-implementations"]
+
+[dependencies]
+rb-core = { workspace = true }
+rb-nbt = { workspace = true }
+fastnbt = { workspace = true }
+flate2 = { workspace = true }
+serde = { workspace = true }
+smol_str = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# Multi-stub composition examples use the v2 PathFinder router.
+rb-synthesis = { workspace = true }
+
+[lints]
+workspace = true

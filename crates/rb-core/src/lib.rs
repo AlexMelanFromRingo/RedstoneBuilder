@@ -10,9 +10,11 @@ pub mod gate;
 pub mod pos;
 pub mod signal;
 pub mod span;
+pub mod timing;
 
 pub use block::BlockId;
 pub use gate::GateKind;
 pub use pos::{Bbox3, Direction, Pos3};
-pub use signal::SignalKind;
+pub use signal::{Signal, SignalKind};
 pub use span::SourceSpan;
+pub use timing::Tick;

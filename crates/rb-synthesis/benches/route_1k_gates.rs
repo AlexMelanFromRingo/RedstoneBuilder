@@ -10,7 +10,8 @@ use std::path::PathBuf;
 use criterion::{criterion_group, criterion_main, Criterion};
 use rb_parser::parse;
 use rb_synthesis::{
-    build_netlist, place, route_with_retry, Grid3D, NetTag, PlaceConfig, RouteConfig,
+    build_netlist, place, route_pathfinder, route_with_retry, CostMap, Grid3D, NetTag,
+    PathFinderConfig, PlaceConfig, RouteConfig,
 };
 
 fn synth_long_chain(n: usize) -> String {
@@ -66,10 +67,22 @@ fn route_pipeline_bench(c: &mut Criterion) {
     }
 
     let template = Grid3D::new();
-    c.bench_function("route_with_retry_1k", |b| {
+    c.bench_function("route_with_retry_1k_lee", |b| {
         b.iter(|| {
             let cfg = RouteConfig::DEFAULT;
             let _ = route_with_retry(&template, &routes, &cfg);
+        })
+    });
+
+    // v2: same input, but via the new A* + PathFinder router.
+    let bounds = rb_core::Bbox3::from_corners(
+        rb_core::Pos3::new(-1024, 0, -1024),
+        rb_core::Pos3::new(1024, 8, 1024),
+    );
+    c.bench_function("route_pathfinder_1k", |b| {
+        b.iter(|| {
+            let mut cost = CostMap::new(bounds);
+            let _ = route_pathfinder(&mut cost, &routes, &PathFinderConfig::DEFAULT);
         })
     });
 }

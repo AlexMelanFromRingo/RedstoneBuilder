@@ -1,0 +1,3 @@
+module analog_add(input analog wire a, input analog wire b, output analog wire sum);
+    comparator c1(.A(a), .B(b), .Y(sum), .MODE(subtract));
+endmodule

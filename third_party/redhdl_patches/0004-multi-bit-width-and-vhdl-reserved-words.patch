@@ -1,0 +1,57 @@
+diff --git a/redhdl/netlist/netlist_template.py b/redhdl/netlist/netlist_template.py
+index 60e7279..4729633 100644
+--- a/redhdl/netlist/netlist_template.py
++++ b/redhdl/netlist/netlist_template.py
+@@ -67,6 +67,7 @@ Netlist(instances={'and': SchematicInstance(...),
+             +--------+
+ """
+ 
++import os
+ from typing import cast
+ 
+ from redhdl.misc.slice import Slice
+@@ -109,9 +110,24 @@ def netlist_from_simple_spec(
+     input_port_bitwidths: dict[str, int] | None = None,
+     output_port_bitwidths: dict[str, int] | None = None,
+ ) -> Netlist:
++    def _resolve_schem(schem_name: str) -> str:
++        # iverilog -tvhdl renames Verilog modules that collide with
++        # VHDL reserved words (xor, and, or, not, ...) by appending
++        # "_module". Our stub library uses the original Verilog name
++        # (e.g. xor.schem, not xor_module.schem), so strip the suffix
++        # when the literal lookup misses.
++        primary = f"schematics/{schem_name}.schem"
++        if os.path.exists(primary):
++            return primary
++        if schem_name.endswith("_module"):
++            fallback = f"schematics/{schem_name[:-len('_module')]}.schem"
++            if os.path.exists(fallback):
++                return fallback
++        return primary  # let load_schem raise its own FileNotFoundError
++
+     instances = {
+         name: schematic_instance_from_schem(
+-            load_schem(f"schematics/{config['schem_name']}.schem")
++            load_schem(_resolve_schem(config["schem_name"]))
+         )
+         for name, config in instance_config.items()
+     }
+diff --git a/redhdl/netlist/vhdl_netlist.py b/redhdl/netlist/vhdl_netlist.py
+index cb662dd..ed653fd 100644
+--- a/redhdl/netlist/vhdl_netlist.py
++++ b/redhdl/netlist/vhdl_netlist.py
+@@ -159,8 +159,12 @@ def netlist_template_from_vhdl_path(  # noqa: C901
+     wire_groups: Any = []
+     for wire_name, bitrange_assignments in arch.var_bitrange_assignments.items():
+         for bitrange, assignment in bitrange_assignments.items():
+-            # TODO: Hande bitranges
+-            assert bitrange == (0, 7)
++            # Originally hard-coded `assert bitrange == (0, 7)`, which
++            # crashed any design using non-8-bit signals (1-bit
++            # primitives like Xor and Diagonal_Not, 16+-bit data paths,
++            # etc.). Wire-alias grouping itself doesn't depend on the
++            # bitrange — it only matters downstream where the bitrange
++            # is preserved separately. Drop the assert.
+             if isinstance(assignment, ReferenceExpr):
+                 wire_group = {wire_name, assignment.var_name}
+                 for other_wire_group in wire_groups:

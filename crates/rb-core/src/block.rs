@@ -40,4 +40,13 @@ pub enum BlockId {
     Lever,
     /// `minecraft:redstone_lamp` (one per module output, visual).
     RedstoneLamp,
+    /// `minecraft:observer` (v2 — block-update-detector primitive).
+    Observer,
+    /// `minecraft:target` (v2 — compact dust redirect).
+    TargetBlock,
+    /// `minecraft:stone_slab[type=bottom]` (v2 — router-only;
+    /// upward-only dust transmission, wire-crossings).
+    Slab,
+    /// `minecraft:glass` (v2 — router-only; orthogonal wire crossings).
+    Glass,
 }

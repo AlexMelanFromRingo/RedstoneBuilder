@@ -1,4 +1,4 @@
-//! Litematica `.litematic` root tag construction (schema v6).
+//! Litematica `.litematic` root tag construction (schema v7).
 //!
 //! See `specs/001-hdl-compiler-cli/contracts/litematic-nbt.md` for the
 //! tag tree this module emits.
@@ -14,16 +14,21 @@ use crate::palette::{BlockState, Palette};
 use crate::BlockGrid;
 
 /// Litematica `Version` field — schema version of the `.litematic`
-/// container. v6 is the long-stable Litematica schema in MC 1.20+ and
-/// still in use for 26.1-compatible Litematica builds.
-pub const LITEMATICA_SCHEMA_VERSION: i32 = 6;
+/// container. v7 is the current schema written by Litematica 0.27.x
+/// (Modrinth, MC 26.1.x) and by the `pre-rewrite/fabric/1.21.1-masa`
+/// source branch (`LitematicaSchematic.java`,
+/// `SCHEMATIC_VERSION = 7`).
+pub const LITEMATICA_SCHEMA_VERSION: i32 = 7;
 
-/// Minecraft Java Edition 26.1 data version (placeholder constant —
-/// the actual integer value is published by Mojang per release). We use
-/// the most recent confirmed value at the time of writing; updating
-/// this is a one-line change if a more authoritative number is
-/// available at integration time.
-pub const MC_DATA_VERSION_26_1: i32 = 4_188;
+/// Litematica `SubVersion` field — bumped after a sleeping-entity
+/// position fix (`SCHEMATIC_VERSION_SUB = 1` in upstream).
+pub const LITEMATICA_SCHEMA_SUB_VERSION: i32 = 1;
+
+/// Minecraft Java Edition 26.1 data version. `4786` per
+/// <https://minecraft.wiki/w/Java_Edition_26.1> (release 2026-03-24).
+/// Bump alongside `SharedConstants.getGameVersion().getSaveVersion()`
+/// when retargeting a later MC patch (e.g. 26.1.2 = 4790).
+pub const MC_DATA_VERSION_26_1: i32 = 4_786;
 
 /// Root of a Litematica file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -34,6 +39,9 @@ pub struct LitematicaRoot {
     /// Litematica schema version.
     #[serde(rename = "Version")]
     pub version: i32,
+    /// Litematica schema sub-version (data-fix counter).
+    #[serde(rename = "SubVersion")]
+    pub sub_version: i32,
     /// File-level metadata.
     #[serde(rename = "Metadata")]
     pub metadata: LitematicaMetadata,
@@ -179,6 +187,7 @@ pub fn build_root(grid: &BlockGrid, name: &str, description: &str) -> Litematica
     LitematicaRoot {
         minecraft_data_version: MC_DATA_VERSION_26_1,
         version: LITEMATICA_SCHEMA_VERSION,
+        sub_version: LITEMATICA_SCHEMA_SUB_VERSION,
         metadata: LitematicaMetadata {
             name: name.to_string(),
             author: "redstonebuilder".to_string(),

@@ -1,0 +1,10 @@
+// v2 event-driven example: monostable (1-tick pulse generator).
+//
+// The observer detects every state change on `trigger` and emits a
+// 1-tick pulse. The repeater on `DELAY(1)` shapes the pulse and keeps
+// downstream signal strength fresh.
+module monostable(input trigger, output pulse);
+    wire pulse_pre;
+    observer o(.WATCH(trigger), .OUT(pulse_pre));
+    repeater r(.IN(pulse_pre), .OUT(pulse), .DELAY(1));
+endmodule

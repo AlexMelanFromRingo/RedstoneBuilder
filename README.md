@@ -12,19 +12,37 @@ Drop `ha.litematic` into your world's `schematics/` folder, open
 Litematica in-game, and place the resulting half-adder.
 
 See **[specs/001-hdl-compiler-cli/quickstart.md](specs/001-hdl-compiler-cli/quickstart.md)**
-for the full onboarding walkthrough, the HDL grammar, the CLI flags,
+for the v1 onboarding walkthrough, the HDL grammar, the CLI flags,
 and the debugging workflow.
+
+## v2 highlights
+
+v2 (epic `002-v2-analog-scale`) adds:
+
+- **Analog wires** (`analog wire s;`) + `comparator(.A, .B, .Y, .MODE(compare|subtract))`.
+- **First-class primitives**: `observer`, `repeater(.IN, .OUT, .DELAY(1..4), .LOCK)`, `target_block`.
+- **Simulated-annealing placement** (`--placer sa`, default; `--placer greedy` keeps v1 path).
+- **A\* + PathFinder router** (`--router pathfinder`; default `--router lee`). PathFinder
+  adds negotiated-congestion rip-up & reroute, adjacency isolation, multi-source A\* for
+  fan-out Steiner trees, and rayon-parallel routing for designs with ≥ 32 nets. On
+  `full_adder` it routes every net where Lee leaves 2 unrouted.
+- **Static timing analysis** with data-race detection.
+- **Hard memory cap** (`--max-ram MB`, default 4096) + **`--stats`** for end-of-compile RAM/timing.
+- **New exit codes**: 7 = PathFinder convergence exhausted, 8 = memory cap, 9 = timing data race.
+
+See **[specs/002-v2-analog-scale/quickstart.md](specs/002-v2-analog-scale/quickstart.md)**.
 
 ## Repository layout
 
-This is a Cargo workspace with five crates:
+This is a Cargo workspace with six crates:
 
 | Crate | Role |
 |---|---|
 | [`crates/rb-core`](crates/rb-core) | Shared types: positions, source spans, gate kinds, block-state catalogue. |
 | [`crates/rb-parser`](crates/rb-parser) | PEG parser for the HDL surface syntax (pest grammar in `src/hdl.pest`). |
-| [`crates/rb-synthesis`](crates/rb-synthesis) | Netlist + cycle detection + cell library + row-based placement + 3D maze router. |
-| [`crates/rb-nbt`](crates/rb-nbt) | Litematica `.litematic` writer (gzip + fastnbt). |
+| [`crates/rb-synthesis`](crates/rb-synthesis) | Netlist + cycle detection + cell library + SA/greedy placement + Lee & PathFinder routers. |
+| [`crates/rb-nbt`](crates/rb-nbt) | Litematica `.litematic` writer (gzip + fastnbt) + Sponge `.schem` reader. |
+| [`crates/rb-stubs`](crates/rb-stubs) | v3 stub library: load hand-built `.schem` gate primitives, compose them with the router (experimental). |
 | [`crates/redstonebuilder`](crates/redstonebuilder) | Binary entry-point: clap CLI + miette diagnostics + pipeline. |
 
 ## Specification & docs

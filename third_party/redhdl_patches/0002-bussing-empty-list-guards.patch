@@ -1,0 +1,119 @@
+diff --git a/redhdl/bussing/naive_bussing.py b/redhdl/bussing/naive_bussing.py
+index 263fc49..b9cb4cf 100644
+--- a/redhdl/bussing/naive_bussing.py
++++ b/redhdl/bussing/naive_bussing.py
+@@ -27,7 +27,10 @@ PartialPinBuses = dict[PinId, RedstoneBussing | None]
+ def dest_pin_buses(
+     netlist: Netlist,
+     placement: InstancePlacement,
+-    max_bussing_steps: int = 50,
++    # Was 50 in the original; raised because larger designs (e.g.
++    # 2-stage 8-bit Adder_Chain) need thousands of A* steps to route
++    # around earlier wires. Their own docstring example uses 10_000.
++    max_bussing_steps: int = 10_000,
+ ) -> PinBuses:
+     instances_region = placement_region(netlist, placement).xz_padded(1)
+ 
+@@ -65,6 +68,8 @@ def bussing_avg_length(pin_buses: PartialPinBuses) -> float:
+     successful_bus_path_lengths = [
+         len(bus.element_sig_strengths) for bus in pin_buses.values() if bus is not None
+     ]
++    if not successful_bus_path_lengths:
++        return 0.0
+     return sum(successful_bus_path_lengths) / len(successful_bus_path_lengths)
+ 
+ 
+@@ -72,6 +77,8 @@ def bussing_max_length(pin_buses: PartialPinBuses) -> float:
+     successful_bus_path_lengths = [
+         len(bus.element_sig_strengths) for bus in pin_buses.values() if bus is not None
+     ]
++    if not successful_bus_path_lengths:
++        return 0.0
+     return max(successful_bus_path_lengths)
+ 
+ 
+@@ -80,6 +87,11 @@ def bussing_avg_min_length(netlist: Netlist, placement: InstancePlacement) -> fl
+         (pin_pos_pair.dest_pin_pos - pin_pos_pair.source_pin_pos).l1()
+         for pin_pos_pair in source_dest_pin_pos_pairs(netlist, placement)
+     ]
++    # Trivial designs (one instance, or a chain with no inter-instance
++    # connections beyond module ports) yield no source→dest pin pairs;
++    # return 0 rather than crashing with ZeroDivisionError.
++    if not l1s:
++        return 0.0
+     return sum(l1s) / len(l1s)
+ 
+ 
+@@ -88,6 +100,8 @@ def bussing_max_min_length(netlist: Netlist, placement: InstancePlacement) -> fl
+         (pin_pos_pair.dest_pin_pos - pin_pos_pair.source_pin_pos).l1()
+         for pin_pos_pair in source_dest_pin_pos_pairs(netlist, placement)
+     ]
++    if not l1s:
++        return 0.0
+     return max(l1s)
+ 
+ 
+@@ -96,13 +110,16 @@ def pin_pair_interrupted_line_of_sight_pct(
+ ) -> float:
+     instance_regions = placement_region(netlist, placement)
+ 
++    total = list(source_dest_pin_pos_pairs(netlist, placement))
++    if not total:
++        return 0.0
+     return sum(
+         1
+-        for pin_pos_pair in source_dest_pin_pos_pairs(netlist, placement)
++        for pin_pos_pair in total
+         if RectangularPrism(
+             pin_pos_pair.source_pin_pos, pin_pos_pair.dest_pin_pos
+         ).intersects(instance_regions)
+-    ) / len(list(source_dest_pin_pos_pairs(netlist, placement)))
++    ) / len(total)
+ 
+ 
+ def pin_pair_excessive_downwards_pct(
+@@ -119,6 +136,8 @@ def pin_pair_excessive_downwards_pct(
+         elif delta.y < 0 and delta_horiz_dist < abs(delta.y):
+             excessively_downwards_pins += 1
+ 
++    if denom == 0:
++        return 0.0
+     return excessively_downwards_pins / denom
+ 
+ 
+@@ -132,6 +151,8 @@ def pin_pair_straight_up_pct(netlist: Netlist, placement: InstancePlacement) ->
+         if delta.y > 0 and delta_horiz_dist == 0:
+             straight_up_pins += 1
+ 
++    if denom == 0:
++        return 0.0
+     return straight_up_pins / denom
+ 
+ 
+@@ -164,6 +185,8 @@ def misaligned_bus_pct(netlist: Netlist, placement: InstancePlacement) -> float:
+ 
+         misaligned_bus_count += (min(log2(stride_direction_error + 1), 8)) / 8
+ 
++    if bus_count == 0:
++        return 0.0
+     return misaligned_bus_count / bus_count
+ 
+ 
+@@ -189,6 +212,8 @@ def stride_aligned_bus_pct(netlist: Netlist, placement: InstancePlacement) -> fl
+ 
+         stride_aligned_bus_count += source_pin_points.step == dest_pin_points.step
+ 
++    if bus_count == 0:
++        return 0.0
+     return stride_aligned_bus_count / bus_count
+ 
+ 
+@@ -231,6 +256,8 @@ def crossed_bus_pct(netlist: Netlist, placement: InstancePlacement) -> float:
+             Pos.elem_max(*relevant_points),
+         )
+ 
++    if not port_pair_region:
++        return 0.0
+     return sum(
+         region.intersects(
+             other_regions := CompositeRegion(

@@ -1,0 +1,3 @@
+module bad(input analog wire a, output y);
+    and g(.A(a), .B(a), .Y(y));
+endmodule

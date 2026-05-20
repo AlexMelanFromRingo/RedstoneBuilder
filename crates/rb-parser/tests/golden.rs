@@ -118,6 +118,78 @@ fn memcell_demo_parses_with_clock_attached() {
 }
 
 #[test]
+fn analog_add_parses_with_comparator_subtract_and_analog_ports() {
+    use rb_core::SignalKind;
+    let (src, path) = read_fixture("analog_add.hdl");
+    let module = parse(&src, &path).expect("parse analog_add.hdl");
+
+    assert_eq!(module.name.as_str(), "analog_add");
+    assert_eq!(module.ports.len(), 3);
+    assert!(matches!(module.ports[0].kind, SignalKind::AnalogStrength));
+    assert!(matches!(module.ports[1].kind, SignalKind::AnalogStrength));
+    assert!(matches!(module.ports[2].kind, SignalKind::AnalogStrength));
+
+    assert_eq!(module.instances.len(), 1);
+    let c = &module.instances[0];
+    assert_eq!(c.inst_name.as_str(), "c1");
+    assert!(matches!(c.kind, GateKind::Comparator));
+    assert!(matches!(
+        c.compare_mode,
+        Some(rb_parser::ast::CompareMode::Subtract)
+    ));
+
+    validate(&module, &src).expect("analog_add validates clean");
+}
+
+#[test]
+fn monostable_parses_with_observer_and_repeater() {
+    let (src, path) = read_fixture("monostable.hdl");
+    let module = parse(&src, &path).expect("parse monostable.hdl");
+
+    assert_eq!(module.instances.len(), 2);
+    let obs = &module.instances[0];
+    assert_eq!(obs.inst_name.as_str(), "o");
+    assert!(matches!(obs.kind, GateKind::Observer));
+
+    let rep = &module.instances[1];
+    assert_eq!(rep.inst_name.as_str(), "r");
+    assert!(matches!(rep.kind, GateKind::Repeater));
+    assert_eq!(rep.repeater_delay, Some(1));
+
+    validate(&module, &src).expect("monostable validates clean");
+}
+
+#[test]
+fn analog_port_into_boolean_gate_is_rejected() {
+    let (src, path) = read_fixture("signal_kind_mismatch.hdl");
+    let module = parse(&src, &path).expect("parses; error is semantic");
+    let errors = validate(&module, &src).expect_err("should fail semantic validation");
+
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, SemanticError::SignalKindMismatch { name, .. } if name == "a")),
+        "expected SignalKindMismatch for net 'a', got: {errors:#?}"
+    );
+}
+
+#[test]
+fn repeater_delay_out_of_range_is_rejected() {
+    let src =
+        "module bad(input a, output y);\n  repeater r(.IN(a), .OUT(y), .DELAY(7));\nendmodule\n";
+    let path = std::path::PathBuf::from("bad_delay.hdl");
+    let module = parse(src, &path).expect("parses");
+    let errors = validate(&module, src).expect_err("delay 7 must fail");
+
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, SemanticError::BadDelay { actual, .. } if *actual == 7)),
+        "expected BadDelay for delay=7, got: {errors:#?}"
+    );
+}
+
+#[test]
 fn wire_decls_with_multiple_names_expand() {
     let src = r#"
         module multi(input a, input b, output y);

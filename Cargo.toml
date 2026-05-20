@@ -5,6 +5,7 @@ members = [
     "crates/rb-parser",
     "crates/rb-synthesis",
     "crates/rb-nbt",
+    "crates/rb-stubs",
     "crates/redstonebuilder",
 ]
 
@@ -21,6 +22,7 @@ rb-core = { path = "crates/rb-core" }
 rb-parser = { path = "crates/rb-parser" }
 rb-synthesis = { path = "crates/rb-synthesis" }
 rb-nbt = { path = "crates/rb-nbt" }
+rb-stubs = { path = "crates/rb-stubs" }
 
 # Third-party (versions pinned per plan.md §Primary Dependencies)
 clap = { version = "4", features = ["derive"] }
@@ -31,6 +33,8 @@ pest_derive = "2"
 smol_str = { version = "0.2", features = ["serde"] }
 petgraph = { version = "0.6", features = ["serde-1"] }
 rand_chacha = "0.3"
+memory-stats = "1"
+rayon = "1"
 fastnbt = "2"
 flate2 = "1"
 serde = { version = "1", features = ["derive", "rc"] }

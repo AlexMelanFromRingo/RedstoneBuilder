@@ -13,8 +13,11 @@ categories = ["compilers", "algorithms"]
 [dependencies]
 rb-core = { workspace = true }
 rb-parser = { workspace = true }
+smol_str = { workspace = true }
 petgraph = { workspace = true }
 rand_chacha = { workspace = true }
+memory-stats = { workspace = true }
+rayon = { workspace = true }
 thiserror = { workspace = true }
 miette = { workspace = true }
 serde = { workspace = true }
@@ -24,6 +27,14 @@ criterion = { workspace = true }
 
 [[bench]]
 name = "route_1k_gates"
+harness = false
+
+[[bench]]
+name = "pathfinder_10k"
+harness = false
+
+[[bench]]
+name = "sa_place_10k"
 harness = false
 
 [lints]

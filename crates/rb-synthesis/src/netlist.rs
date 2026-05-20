@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use petgraph::stable_graph::{NodeIndex, StableDiGraph};
 use rb_core::{GateKind, SourceSpan};
-use rb_parser::ast::{Connection, GateInst, Ident, Module, PortDir};
+use rb_parser::ast::{CompareMode, Connection, GateInst, Ident, Module, PortDir};
 use serde::Serialize;
 
 use crate::error::SynthError;
@@ -19,6 +19,7 @@ pub struct NetId(pub u32);
 
 /// Role that an endpoint plays on a particular [`NetlistNode`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[non_exhaustive]
 pub enum EndpointRole {
     /// External module input — drives downstream nodes.
     ModuleInput,
@@ -36,6 +37,20 @@ pub enum EndpointRole {
     WriteEnable,
     /// `Q` output of a stateful gate (US2+).
     Q,
+    /// Analog input on a comparator (v2). Numbered: 0 = `.A`, 1 = `.B`.
+    AnalogIn(u8),
+    /// Analog output of a comparator (v2).
+    AnalogOut,
+    /// Watched input on an observer (v2) — cycle-cut (async stateful).
+    ObserverWatch,
+    /// 1-tick pulse output of an observer (v2).
+    ObserverPulse,
+    /// Data input of a user-instantiable repeater (v2).
+    RepeaterIn,
+    /// Output of a user-instantiable repeater (v2).
+    RepeaterOut,
+    /// Optional lock input of a repeater (v2) — cycle-cut (stateful).
+    RepeaterLock,
 }
 
 /// One node in the netlist graph.
@@ -61,6 +76,15 @@ pub enum NetlistNode {
         inst: Ident,
         /// Primitive kind.
         kind: GateKind,
+        /// v2: per-instance repeater delay (1..=4). `None` for
+        /// non-repeater gates and for repeater gates with default
+        /// delay=1.
+        #[serde(default)]
+        repeater_delay: Option<u8>,
+        /// v2: per-instance comparator mode. `None` for non-comparator
+        /// gates.
+        #[serde(default)]
+        compare_mode: Option<CompareMode>,
         /// Span of the instance declaration.
         span: SourceSpan,
     },
@@ -185,6 +209,8 @@ pub fn build_netlist(module: &Module) -> Result<Netlist, SynthError> {
         let idx = graph.add_node(NetlistNode::Gate {
             inst: inst.inst_name.clone(),
             kind: inst.kind,
+            repeater_delay: inst.repeater_delay,
+            compare_mode: inst.compare_mode,
             span: inst.span.clone(),
         });
         gate_nodes.push((idx, inst));
@@ -256,7 +282,12 @@ impl EndpointRole {
     pub fn is_output(self) -> bool {
         matches!(
             self,
-            EndpointRole::DataOut | EndpointRole::Q | EndpointRole::ModuleInput
+            EndpointRole::DataOut
+                | EndpointRole::Q
+                | EndpointRole::ModuleInput
+                | EndpointRole::AnalogOut
+                | EndpointRole::ObserverPulse
+                | EndpointRole::RepeaterOut
         )
     }
 }
@@ -298,6 +329,40 @@ fn port_role(kind: GateKind, conn: &Connection) -> EndpointRole {
                 EndpointRole::WriteEnable
             } else {
                 EndpointRole::DataInStateful
+            }
+        }
+        GateKind::Comparator => {
+            if p.eq_ignore_ascii_case("Y") {
+                EndpointRole::AnalogOut
+            } else if p.eq_ignore_ascii_case("A") {
+                EndpointRole::AnalogIn(0)
+            } else if p.eq_ignore_ascii_case("B") {
+                EndpointRole::AnalogIn(1)
+            } else {
+                EndpointRole::AnalogIn(0)
+            }
+        }
+        GateKind::Observer => {
+            if p.eq_ignore_ascii_case("OUT") {
+                EndpointRole::ObserverPulse
+            } else {
+                EndpointRole::ObserverWatch
+            }
+        }
+        GateKind::Repeater => {
+            if p.eq_ignore_ascii_case("OUT") {
+                EndpointRole::RepeaterOut
+            } else if p.eq_ignore_ascii_case("LOCK") {
+                EndpointRole::RepeaterLock
+            } else {
+                EndpointRole::RepeaterIn
+            }
+        }
+        GateKind::TargetBlock => {
+            if p.eq_ignore_ascii_case("OUT") {
+                EndpointRole::DataOut
+            } else {
+                EndpointRole::DataIn(0)
             }
         }
         _ => EndpointRole::DataIn(0),

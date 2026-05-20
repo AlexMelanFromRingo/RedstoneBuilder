@@ -102,14 +102,29 @@ pub fn place(netlist: &Netlist, cfg: &PlaceConfig) -> Result<Placement, PlaceErr
         let mut row_max_z_extent: i32 = 0;
 
         for node in group {
-            let kind = match &netlist.graph[node] {
-                NetlistNode::Gate { kind, .. } => *kind,
+            let (kind, repeater_delay, compare_mode) = match &netlist.graph[node] {
+                NetlistNode::Gate {
+                    kind,
+                    repeater_delay,
+                    compare_mode,
+                    ..
+                } => (*kind, *repeater_delay, *compare_mode),
                 _ => continue,
             };
-            let macro_cell = macrocell_for(kind).map_err(|e: SynthError| PlaceError::TooLarge {
-                actual: format!("(internal synth error: {e})"),
-                bound: "n/a".to_string(),
-            })?;
+            let mut macro_cell =
+                macrocell_for(kind).map_err(|e: SynthError| PlaceError::TooLarge {
+                    actual: format!("(internal synth error: {e})"),
+                    bound: "n/a".to_string(),
+                })?;
+            // v2: thread per-instance attributes from the netlist node
+            // onto the macro-cell so the NBT writer can patch the
+            // resulting block-state.
+            if repeater_delay.is_some() {
+                macro_cell.repeater_delay = repeater_delay;
+            }
+            if compare_mode.is_some() {
+                macro_cell.comparator_mode = compare_mode;
+            }
 
             let origin = Pos3::new(cursor_x, 0, cursor_z);
             let footprint = Bbox3 {

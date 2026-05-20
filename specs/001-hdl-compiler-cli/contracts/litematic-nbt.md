@@ -2,9 +2,11 @@
 
 **Crate**: `rb-nbt`
 **Format**: gzip-compressed NBT (RFC 1952 outside; NBT inside).
-**Target Litematica schema**: v6 (current schema as of Litematica for MC 1.20+;
-still in use for 26.1-compatible Litematica builds — verify at integration
-time per FR-014).
+**Target Litematica schema**: v7 + `SubVersion = 1` (current schema written
+by Litematica 0.27.x on MC 26.1.x — see upstream
+`LitematicaSchematic.java` constants `SCHEMATIC_VERSION = 7`,
+`SCHEMATIC_VERSION_SUB = 1` on branch
+`pre-rewrite/fabric/1.21.1-masa`).
 
 ## Top-level structure
 
@@ -12,8 +14,9 @@ The root tag is an unnamed `TAG_Compound` with fields:
 
 ```text
 TAG_Compound (root)
-├── "MinecraftDataVersion": TAG_Int        // Java Edition data version for the target MC release
-├── "Version":              TAG_Int = 6    // Litematica schema version
+├── "MinecraftDataVersion": TAG_Int = 4786 // Java Edition data version (MC 26.1 = 4786)
+├── "Version":              TAG_Int = 7    // Litematica schema version
+├── "SubVersion":           TAG_Int = 1    // schema data-fix counter
 ├── "Metadata":             TAG_Compound   // see below
 └── "Regions":              TAG_Compound   // map: region name → region compound
 ```

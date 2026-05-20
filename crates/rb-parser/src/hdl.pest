@@ -1,7 +1,9 @@
 // HDL grammar — Verilog subset.
-// US1: combinational primitives (and/or/not/xor).
-// US2: sequential primitives (dtrigger/memcell) inside `always @(posedge clk)` blocks.
-// See specs/001-hdl-compiler-cli/contracts/hdl-grammar.md for the contract.
+// v1: combinational primitives (and/or/not/xor).
+// v2: sequential primitives (dtrigger/memcell) inside `always @(posedge clk)` blocks.
+// v2 additions: analog wire, comparator(.MODE), observer, repeater (logic
+//               primitive with .DELAY/.LOCK), target_block.
+// See specs/{001,002}/contracts/hdl-grammar.md for the contracts.
 
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 COMMENT    = _{ "//" ~ (!"\n" ~ ANY)* | "/*" ~ (!"*/" ~ ANY)* ~ "*/" }
@@ -15,18 +17,39 @@ module_decl = {
 }
 
 port_list = { port_decl ~ ("," ~ port_decl)* }
-port_decl = { port_dir ~ ident }
+port_decl = { port_dir ~ wire_kind? ~ ident }
 port_dir  = { kw_input | kw_output }
 
-module_item = _{ wire_decl | gate_inst | always_block }
+module_item = _{ wire_decl | gate_inst | comparator_inst | observer_inst | always_block }
 
-wire_decl = { kw_wire ~ ident ~ ("," ~ ident)* ~ ";" }
+// v2: `wire X;` (boolean, default) or `analog wire X;` (analog strength).
+wire_decl = { wire_kind ~ ident ~ ("," ~ ident)* ~ ";" }
+wire_kind = { kw_analog ~ kw_wire | kw_wire }
 
+// v1 combinational + v2 logic primitives (repeater, target_block).
 gate_inst = { gate_kind ~ ident ~ "(" ~ conn_list ~ ")" ~ ";" }
-gate_kind = { kw_and | kw_or | kw_not | kw_xor }
+gate_kind = { kw_and | kw_or | kw_not | kw_xor | kw_repeater | kw_target_block }
 conn_list = { conn ~ ("," ~ conn)* }
-conn      = { "." ~ ident ~ "(" ~ ident ~ ")" }
+conn      = { "." ~ ident ~ "(" ~ conn_arg ~ ")" }
 
+// A connection target is either a net identifier or an integer
+// literal (used by repeater .DELAY(N)).
+conn_arg     = { integer_lit | ident }
+integer_lit  = @{ ASCII_DIGIT+ }
+
+// v2: comparator carries an explicit .MODE(compare|subtract).
+comparator_inst = {
+    kw_comparator ~ ident ~ "(" ~ conn_list ~ "," ~ mode_attr ~ ")" ~ ";"
+}
+mode_attr = { "." ~ kw_mode_id ~ "(" ~ (kw_compare | kw_subtract) ~ ")" }
+kw_mode_id = @{ "MODE" ~ !ident_continue }
+
+// v2: observer has exactly two named ports — .WATCH and .OUT.
+observer_inst = {
+    kw_observer ~ ident ~ "(" ~ conn ~ "," ~ conn ~ ")" ~ ";"
+}
+
+// v1 sequential primitives inside `always` blocks.
 always_block = {
     kw_always ~ "@" ~ "(" ~ edge_spec ~ ")"
     ~ kw_begin ~ stateful_inst+ ~ kw_end
@@ -35,32 +58,41 @@ edge_spec       = { (kw_posedge | kw_negedge) ~ ident }
 stateful_inst   = { stateful_kind ~ ident ~ "(" ~ conn_list ~ ")" ~ ";" }
 stateful_kind   = { kw_dtrigger | kw_memcell }
 
-kw_module    = @{ "module"    ~ !ident_continue }
-kw_endmodule = @{ "endmodule" ~ !ident_continue }
-kw_input     = @{ "input"     ~ !ident_continue }
-kw_output    = @{ "output"    ~ !ident_continue }
-kw_wire      = @{ "wire"      ~ !ident_continue }
-kw_and       = @{ "and"       ~ !ident_continue }
-kw_or        = @{ "or"        ~ !ident_continue }
-kw_not       = @{ "not"       ~ !ident_continue }
-kw_xor       = @{ "xor"       ~ !ident_continue }
-kw_always    = @{ "always"    ~ !ident_continue }
-kw_posedge   = @{ "posedge"   ~ !ident_continue }
-kw_negedge   = @{ "negedge"   ~ !ident_continue }
-kw_begin     = @{ "begin"     ~ !ident_continue }
-kw_end       = @{ "end"       ~ !ident_continue }
-kw_dtrigger  = @{ "dtrigger"  ~ !ident_continue }
-kw_memcell   = @{ "memcell"   ~ !ident_continue }
+kw_module      = @{ "module"       ~ !ident_continue }
+kw_endmodule   = @{ "endmodule"    ~ !ident_continue }
+kw_input       = @{ "input"        ~ !ident_continue }
+kw_output      = @{ "output"       ~ !ident_continue }
+kw_wire        = @{ "wire"         ~ !ident_continue }
+kw_analog      = @{ "analog"       ~ !ident_continue }
+kw_and         = @{ "and"          ~ !ident_continue }
+kw_or          = @{ "or"           ~ !ident_continue }
+kw_not         = @{ "not"          ~ !ident_continue }
+kw_xor         = @{ "xor"          ~ !ident_continue }
+kw_always      = @{ "always"       ~ !ident_continue }
+kw_posedge     = @{ "posedge"      ~ !ident_continue }
+kw_negedge     = @{ "negedge"      ~ !ident_continue }
+kw_begin       = @{ "begin"        ~ !ident_continue }
+kw_end         = @{ "end"          ~ !ident_continue }
+kw_dtrigger    = @{ "dtrigger"     ~ !ident_continue }
+kw_memcell     = @{ "memcell"      ~ !ident_continue }
+kw_comparator  = @{ "comparator"   ~ !ident_continue }
+kw_observer    = @{ "observer"     ~ !ident_continue }
+kw_repeater    = @{ "repeater"     ~ !ident_continue }
+kw_target_block = @{ "target_block" ~ !ident_continue }
+kw_compare     = @{ "compare"      ~ !ident_continue }
+kw_subtract    = @{ "subtract"     ~ !ident_continue }
 
 ident = @{ !(reserved ~ !ident_continue) ~ ident_start ~ ident_continue* }
 
 ident_start    = _{ ASCII_ALPHA | "_" }
 ident_continue = _{ ASCII_ALPHANUMERIC | "_" }
 reserved = _{
-    "module" | "endmodule" | "input" | "output" | "wire"
+    "module" | "endmodule" | "input" | "output" | "wire" | "analog"
   | "and" | "or" | "not" | "xor"
   | "always" | "posedge" | "negedge" | "begin" | "end"
   | "dtrigger" | "memcell"
+  | "comparator" | "observer" | "repeater" | "target_block"
+  | "compare" | "subtract"
   | "parameter" | "localparam" | "generate" | "endgenerate"
   | "assign" | "function" | "task" | "case" | "if" | "else" | "for" | "while"
   | "reg"

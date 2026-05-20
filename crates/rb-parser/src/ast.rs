@@ -3,7 +3,7 @@
 //! Sequential constructs (`ClockEdge`, `Edge`) are intentionally absent
 //! in US1 — they land in US2.
 
-use rb_core::{GateKind, SourceSpan};
+use rb_core::{GateKind, SignalKind, SourceSpan};
 use serde::Serialize;
 use smol_str::SmolStr;
 
@@ -30,6 +30,10 @@ pub struct Port {
     pub name: Ident,
     /// Direction (input or output).
     pub dir: PortDir,
+    /// Signal kind. `Boolean` by default (v1); `AnalogStrength` if
+    /// declared as `input analog wire …` / `output analog wire …`
+    /// (v2).
+    pub kind: SignalKind,
     /// Span covering the `input <name>` or `output <name>` declaration.
     pub span: SourceSpan,
 }
@@ -48,11 +52,21 @@ pub enum PortDir {
 pub struct WireDecl {
     /// Wire name.
     pub name: Ident,
+    /// What kind of signal the wire carries. Bare `wire X;` is
+    /// [`SignalKind::Boolean`] (v1 default); `analog wire X;` is
+    /// [`SignalKind::AnalogStrength`] (v2).
+    pub kind: SignalKind,
     /// Span of this individual identifier within its declaration.
     pub span: SourceSpan,
 }
 
 /// One gate instantiation.
+///
+/// v1 carried only `kind: GateKind` + `clock`. v2 adds two optional
+/// fields (`compare_mode`, `repeater_delay`) that are `None` for v1
+/// primitives and `Some(_)` for the corresponding v2 primitives
+/// (`comparator`, `repeater`). Keeping this additive lets all v1
+/// pattern-matches on `gate.kind` continue to work unchanged.
 #[derive(Debug, Clone, Serialize)]
 pub struct GateInst {
     /// Instance name (the identifier between the gate keyword and the
@@ -66,8 +80,24 @@ pub struct GateInst {
     /// `always @(<edge> <clk>)` block (US2+). `None` for purely
     /// combinational primitives.
     pub clock: Option<ClockEdge>,
+    /// `Some(_)` iff `kind == GateKind::Comparator` — selects compare
+    /// vs subtract semantics for the comparator (v2).
+    pub compare_mode: Option<CompareMode>,
+    /// `Some(_)` iff `kind == GateKind::Repeater` — the repeater's
+    /// delay setting in MC repeater-clicks (1..=4 redstone-tick
+    /// pairs).
+    pub repeater_delay: Option<u8>,
     /// Span covering the whole `kind name(...)` statement.
     pub span: SourceSpan,
+}
+
+/// Comparator operating mode (v2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum CompareMode {
+    /// `compare` mode: output = A if A ≥ B else 0.
+    Compare,
+    /// `subtract` mode: output = max(0, A − B).
+    Subtract,
 }
 
 /// `always @(posedge clk)` / `always @(negedge clk)` annotation attached

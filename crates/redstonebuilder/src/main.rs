@@ -33,6 +33,15 @@ fn main() {
                     summary.elapsed.as_secs_f64()
                 ),
             }
+            if cli.stats {
+                eprintln!(
+                    "stats: gates={} blocks={} footprint={w}x{h}x{d} time={:.3}s peak_ram={}MiB",
+                    summary.gate_count,
+                    summary.block_count,
+                    summary.elapsed.as_secs_f64(),
+                    summary.peak_ram_bytes / (1024 * 1024),
+                );
+            }
             std::process::exit(ExitCategory::Success as i32);
         }
         Err(err) => {

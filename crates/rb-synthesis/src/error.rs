@@ -55,11 +55,11 @@ pub enum PlaceError {
     },
 }
 
-/// Errors raised by routing (FR-008, FR-009, FR-015).
+/// Errors raised by routing (FR-008, FR-009, FR-015, FR-V16).
 #[derive(Debug, Error, Diagnostic)]
 pub enum RouteError {
-    /// The router exhausted its bbox-expansion budget without finding a
-    /// valid layout for all nets.
+    /// v1: The bbox-expansion budget of the legacy Lee's router was
+    /// exhausted without finding a valid layout for all nets.
     #[error(
         "routing failed: {} unrouted net(s) after {retries} bbox expansion(s)",
         unrouted.len()
@@ -72,5 +72,22 @@ pub enum RouteError {
         retries: u8,
         /// Final bounding box, as `W×H×D`.
         final_bbox: String,
+    },
+
+    /// v2: PathFinder iterative router exhausted its
+    /// `--max-routing-iterations` budget without convergence (FR-V16).
+    /// Maps to CLI exit code 7.
+    #[error(
+        "routing did not converge: {} unrouted/overused cell(s) after {iterations} iteration(s)",
+        unrouted.len()
+    )]
+    #[diagnostic(code(rb_synthesis::convergence_exhausted))]
+    ConvergenceExhausted {
+        /// Names of the nets that could not be routed, or "overuse@<pos>" markers.
+        unrouted: Vec<String>,
+        /// Number of iterations attempted.
+        iterations: u32,
+        /// Peak congestion observed.
+        peak_congestion: u32,
     },
 }

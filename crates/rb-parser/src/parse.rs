@@ -7,10 +7,12 @@ use miette::{NamedSource, SourceSpan as MietteSpan};
 use pest::iterators::Pair;
 use pest::Parser;
 use pest_derive::Parser;
-use rb_core::{GateKind, SourceSpan};
+use rb_core::{GateKind, SignalKind, SourceSpan};
 use smol_str::SmolStr;
 
-use crate::ast::{ClockEdge, Connection, Edge, GateInst, Ident, Module, Port, PortDir, WireDecl};
+use crate::ast::{
+    ClockEdge, CompareMode, Connection, Edge, GateInst, Ident, Module, Port, PortDir, WireDecl,
+};
 use crate::error::ParseError;
 
 #[derive(Parser)]
@@ -75,6 +77,12 @@ fn build_module(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> Modu
             Rule::gate_inst => {
                 instances.push(build_gate_inst(inner, file, source));
             }
+            Rule::comparator_inst => {
+                instances.push(build_comparator_inst(inner, file, source));
+            }
+            Rule::observer_inst => {
+                instances.push(build_observer_inst(inner, file, source));
+            }
             Rule::always_block => {
                 instances.extend(build_always_block(inner, file, source));
             }
@@ -94,6 +102,7 @@ fn build_module(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> Modu
 fn build_port(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> Port {
     let span = make_span(&pair, file, source);
     let mut dir = PortDir::Input;
+    let mut kind = SignalKind::Boolean;
     let mut name = placeholder_ident("<missing>", file, source, &span);
 
     for inner in pair.into_inner() {
@@ -107,6 +116,13 @@ fn build_port(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> Port {
                     };
                 }
             }
+            Rule::wire_kind => {
+                for k in inner.into_inner() {
+                    if matches!(k.as_rule(), Rule::kw_analog) {
+                        kind = SignalKind::AnalogStrength;
+                    }
+                }
+            }
             Rule::ident => {
                 name = make_ident(inner, file, source);
             }
@@ -114,16 +130,39 @@ fn build_port(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> Port {
         }
     }
 
-    Port { name, dir, span }
+    Port {
+        name,
+        dir,
+        kind,
+        span,
+    }
 }
 
 fn build_wires(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> Vec<WireDecl> {
+    // First detect the wire_kind (looks for `kw_analog` token inside the
+    // wire_kind rule). `wire X;` → Boolean (default); `analog wire X;`
+    // → AnalogStrength.
+    let mut kind = SignalKind::Boolean;
+    for inner in pair.clone().into_inner() {
+        if matches!(inner.as_rule(), Rule::wire_kind) {
+            for k in inner.into_inner() {
+                if matches!(k.as_rule(), Rule::kw_analog) {
+                    kind = SignalKind::AnalogStrength;
+                }
+            }
+        }
+    }
+
     pair.into_inner()
         .filter(|p| matches!(p.as_rule(), Rule::ident))
         .map(|p| {
             let span = make_span(&p, file, source);
             let id = make_ident(p, file, source);
-            WireDecl { name: id, span }
+            WireDecl {
+                name: id,
+                kind,
+                span,
+            }
         })
         .collect()
 }
@@ -143,6 +182,8 @@ fn build_gate_inst(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> G
                         Rule::kw_or => GateKind::Or,
                         Rule::kw_not => GateKind::Not,
                         Rule::kw_xor => GateKind::Xor,
+                        Rule::kw_repeater => GateKind::Repeater,
+                        Rule::kw_target_block => GateKind::TargetBlock,
                         _ => kind,
                     };
                 }
@@ -161,11 +202,95 @@ fn build_gate_inst(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> G
         }
     }
 
+    // For repeater instances, extract optional `.DELAY(N)` from the
+    // connection list — the validator enforces N ∈ 1..=4 (T014).
+    let repeater_delay = if matches!(kind, GateKind::Repeater) {
+        connections
+            .iter()
+            .find(|c| c.port.as_str().eq_ignore_ascii_case("DELAY"))
+            .and_then(|c| c.net.as_str().parse::<u8>().ok())
+            .or(Some(1))
+    } else {
+        None
+    };
+
     GateInst {
         inst_name,
         kind,
         connections,
         clock: None,
+        compare_mode: None,
+        repeater_delay,
+        span,
+    }
+}
+
+fn build_comparator_inst(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> GateInst {
+    let span = make_span(&pair, file, source);
+    let mut inst_name = placeholder_ident("<missing>", file, source, &span);
+    let mut connections: Vec<Connection> = Vec::new();
+    let mut mode = CompareMode::Compare;
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::ident => {
+                inst_name = make_ident(inner, file, source);
+            }
+            Rule::conn_list => {
+                for conn_pair in inner.into_inner() {
+                    if matches!(conn_pair.as_rule(), Rule::conn) {
+                        connections.push(build_conn(conn_pair, file, source));
+                    }
+                }
+            }
+            Rule::mode_attr => {
+                for kw in inner.into_inner() {
+                    mode = match kw.as_rule() {
+                        Rule::kw_subtract => CompareMode::Subtract,
+                        Rule::kw_compare => CompareMode::Compare,
+                        _ => mode,
+                    };
+                }
+            }
+            _ => {}
+        }
+    }
+
+    GateInst {
+        inst_name,
+        kind: GateKind::Comparator,
+        connections,
+        clock: None,
+        compare_mode: Some(mode),
+        repeater_delay: None,
+        span,
+    }
+}
+
+fn build_observer_inst(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> GateInst {
+    let span = make_span(&pair, file, source);
+    let mut inst_name = placeholder_ident("<missing>", file, source, &span);
+    let mut connections: Vec<Connection> = Vec::new();
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::ident => {
+                inst_name = make_ident(inner, file, source);
+            }
+            Rule::conn => {
+                connections.push(build_conn(inner, file, source));
+            }
+            _ => {}
+        }
+    }
+
+    GateInst {
+        inst_name,
+        kind: GateKind::Observer,
+        connections,
+        clock: None,
+        compare_mode: None,
+        repeater_delay: None,
         span,
     }
 }
@@ -253,25 +378,50 @@ fn build_stateful_inst(
         kind,
         connections,
         clock,
+        compare_mode: None,
+        repeater_delay: None,
         span,
     }
 }
 
 fn build_conn(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> Connection {
     let span = make_span(&pair, file, source);
-    let mut idents = pair
-        .into_inner()
-        .filter(|p| matches!(p.as_rule(), Rule::ident))
-        .map(|p| make_ident(p, file, source));
+    let mut port: Option<Ident> = None;
+    let mut net: Option<Ident> = None;
 
-    let port = idents
-        .next()
-        .unwrap_or_else(|| placeholder_ident("<missing>", file, source, &span));
-    let net = idents
-        .next()
-        .unwrap_or_else(|| placeholder_ident("<missing>", file, source, &span));
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::ident => {
+                let id = make_ident(inner, file, source);
+                if port.is_none() {
+                    port = Some(id);
+                } else {
+                    net = Some(id);
+                }
+            }
+            Rule::conn_arg => {
+                // The conn_arg wraps either an ident or an integer_lit.
+                // For integer_lit, we synthesise an Ident whose text is
+                // the literal — downstream code (e.g. repeater_delay
+                // extraction) parses it as a u8.
+                if let Some(arg) = inner.into_inner().next() {
+                    let span = make_span(&arg, file, source);
+                    let text = arg.as_str();
+                    net = Some(Ident {
+                        text: SmolStr::new(text),
+                        span,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
 
-    Connection { port, net, span }
+    Connection {
+        port: port.unwrap_or_else(|| placeholder_ident("<missing>", file, source, &span)),
+        net: net.unwrap_or_else(|| placeholder_ident("<missing>", file, source, &span)),
+        span,
+    }
 }
 
 fn make_ident(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> Ident {

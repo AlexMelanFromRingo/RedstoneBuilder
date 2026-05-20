@@ -1,0 +1,5 @@
+module monostable(input trigger, output pulse);
+    wire pulse_pre;
+    observer o(.WATCH(trigger), .OUT(pulse_pre));
+    repeater r(.IN(pulse_pre), .OUT(pulse), .DELAY(1));
+endmodule

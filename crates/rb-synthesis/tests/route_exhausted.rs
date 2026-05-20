@@ -27,6 +27,7 @@ fn distance_cap_exhaustion_returns_exhausted_with_unrouted_list() {
             assert_eq!(retries, 1);
             assert!(final_bbox.contains("max_distance"));
         }
+        other => panic!("expected Exhausted, got {other:?}"),
     }
 }
 

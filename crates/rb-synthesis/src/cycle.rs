@@ -98,11 +98,17 @@ fn is_cycle_cutting(dst: &NetlistNode, to_role: EndpointRole) -> bool {
         return false;
     };
     if !kind_is_stateful(*kind) {
-        return false;
+        // v2: RepeaterLock is also a stateful cycle-cut even though
+        // the host gate (Repeater) is not itself "stateful" — the
+        // lock semantics make a Q←D feedback through lock legal.
+        return matches!(to_role, EndpointRole::RepeaterLock);
     }
     matches!(
         to_role,
-        EndpointRole::DataInStateful | EndpointRole::WriteEnable
+        EndpointRole::DataInStateful
+            | EndpointRole::WriteEnable
+            | EndpointRole::ObserverWatch
+            | EndpointRole::RepeaterLock
     )
 }
 

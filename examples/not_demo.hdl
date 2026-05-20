@@ -1,0 +1,5 @@
+// Minimal single-gate sanity test for the rewritten NOT macrocell.
+// Build in MC 26.1.2, toggle input `a`, observe `q` is the inverse.
+module not_demo(input a, output q);
+    not g(.A(a), .Y(q));
+endmodule

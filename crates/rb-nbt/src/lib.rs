@@ -14,15 +14,17 @@ pub mod error;
 pub mod litematic;
 pub mod pack;
 pub mod palette;
+pub mod sponge_schem;
 pub mod writer;
 
 pub use error::NbtError;
 pub use litematic::{
     bounds_for_origin_and_size, build_root, LitematicaMetadata, LitematicaRoot, Region, Xyz,
-    LITEMATICA_SCHEMA_VERSION, MC_DATA_VERSION_26_1,
+    LITEMATICA_SCHEMA_SUB_VERSION, LITEMATICA_SCHEMA_VERSION, MC_DATA_VERSION_26_1,
 };
 pub use pack::{pack_block_states, unpack_block_states};
-pub use palette::{block_state_for, BlockState, Palette};
+pub use palette::{block_state_for, override_property, BlockState, Palette};
+pub use sponge_schem::{decode_sponge_schem, BlockEntity, SpongeError, SpongeSchematic};
 pub use writer::{decode_from_bytes, encode_to_bytes, write_litematic};
 
 /// Sparse 3D block grid the writer consumes. Cells not present are

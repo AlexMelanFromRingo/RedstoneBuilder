@@ -121,4 +121,61 @@ pub enum SemanticError {
         #[source_code]
         src: NamedSource<String>,
     },
+
+    /// A wire's declared `SignalKind` does not match how a gate
+    /// instance is consuming it (v2 — e.g., feeding an `analog wire`
+    /// into a boolean `and` gate, or vice versa).
+    #[error("net '{name}' has kind {found:?} but gate '{inst}' expects {expected:?}")]
+    #[diagnostic(code(rb_parser::signal_kind_mismatch))]
+    SignalKindMismatch {
+        /// Net name.
+        name: String,
+        /// Gate instance referencing the net.
+        inst: String,
+        /// Kind the wire was declared as.
+        found: String,
+        /// Kind the gate's port expects.
+        expected: String,
+        /// Reference span.
+        #[label("kind mismatch")]
+        at: MietteSpan,
+        /// Source code.
+        #[source_code]
+        src: NamedSource<String>,
+    },
+
+    /// A v2 `repeater` instance declared a `.DELAY(N)` outside the
+    /// allowed `1..=4` range.
+    #[error("repeater '{inst}' has invalid delay {actual}; allowed range is 1..=4")]
+    #[diagnostic(code(rb_parser::bad_delay))]
+    BadDelay {
+        /// Repeater instance name.
+        inst: String,
+        /// The offending delay value.
+        actual: u32,
+        /// Span of the instance.
+        #[label("invalid delay")]
+        at: MietteSpan,
+        /// Source code.
+        #[source_code]
+        src: NamedSource<String>,
+    },
+
+    /// A v2 `comparator` instance declared a `.MODE(...)` outside the
+    /// allowed `{compare, subtract}` set. (Currently caught at parse
+    /// time, kept here so future custom modes have a slot.)
+    #[error("comparator '{inst}' has invalid mode '{actual}'; allowed: compare, subtract")]
+    #[diagnostic(code(rb_parser::bad_mode))]
+    BadMode {
+        /// Comparator instance name.
+        inst: String,
+        /// The offending mode keyword.
+        actual: String,
+        /// Span of the instance.
+        #[label("invalid mode")]
+        at: MietteSpan,
+        /// Source code.
+        #[source_code]
+        src: NamedSource<String>,
+    },
 }

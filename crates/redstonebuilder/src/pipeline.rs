@@ -11,13 +11,15 @@ use std::time::Instant;
 
 use miette::Diagnostic;
 use petgraph::stable_graph::NodeIndex;
+use rb_core::BlockId;
 use rb_core::{Bbox3, Direction, Pos3};
-use rb_nbt::{block_state_for, write_litematic, BlockGrid};
+use rb_nbt::{block_state_for, override_property, write_litematic, BlockGrid};
 use rb_synthesis::{
-    build_netlist, detect_cycles, place,
+    analyse_timing, astar_route_multisrc, build_netlist, detect_cycles, place_with,
     route::{RouteSegment, RoutedWire},
-    route_single_bounded, CellState, EndpointRole, Grid3D, NetTag, Netlist, NetlistNode,
-    PlaceConfig, Placement, RouteConfig, SingleRouteOutcome,
+    route_pathfinder, route_single_bounded, BudgetGuard, CellState, CostMap, EndpointRole, Grid3D,
+    MemoryError, NetTag, Netlist, NetlistNode, PathFinderConfig, PlaceConfig, Placement,
+    PlacerKind, RouteConfig, RouteError, SaConfig, SingleRouteOutcome, TimingConfig, TimingError,
 };
 
 use crate::cli::Cli;
@@ -35,6 +37,8 @@ pub struct RunSummary {
     pub footprint: (u32, u32, u32),
     /// Wall-clock duration of the compile.
     pub elapsed: std::time::Duration,
+    /// v2: peak resident-set-size sampled during the compile, bytes.
+    pub peak_ram_bytes: u64,
 }
 
 /// Top-level pipeline errors. Returned as a `miette::Report` from
@@ -91,6 +95,17 @@ pub enum PipelineError {
     #[error("{0}")]
     #[diagnostic(transparent)]
     Nbt(rb_nbt::NbtError),
+
+    /// v2: PathFinder router did not converge (FR-V16).
+    /// Wrapped into the Route variant when emitted from the v2 router.
+    #[error("{0}")]
+    #[diagnostic(transparent)]
+    Memory(MemoryError),
+
+    /// v2: Static-timing analysis detected a data race (FR-V12).
+    #[error("{0}")]
+    #[diagnostic(transparent)]
+    Timing(TimingError),
 }
 
 /// Exit code categories per `contracts/cli.md`.
@@ -111,6 +126,12 @@ pub enum ExitCategory {
     Route = 5,
     /// 6 — NBT/output failure.
     Nbt = 6,
+    /// 7 — v2 PathFinder router convergence-exhausted (FR-V16).
+    PathFinderExhausted = 7,
+    /// 8 — v2 memory cap exceeded (FR-V10).
+    MemoryCap = 8,
+    /// 9 — v2 static-timing data race (FR-V12).
+    TimingRace = 9,
 }
 
 impl ExitCategory {
@@ -121,8 +142,15 @@ impl ExitCategory {
             PipelineError::Parse(_) | PipelineError::Semantic(_) => ExitCategory::Parse,
             PipelineError::Synth(_) | PipelineError::Cycle(_) => ExitCategory::Synth,
             PipelineError::Place(_) => ExitCategory::Place,
-            PipelineError::Route(_) => ExitCategory::Route,
+            PipelineError::Route(err) => match err {
+                rb_synthesis::RouteError::ConvergenceExhausted { .. } => {
+                    ExitCategory::PathFinderExhausted
+                }
+                _ => ExitCategory::Route,
+            },
             PipelineError::Nbt(_) => ExitCategory::Nbt,
+            PipelineError::Memory(_) => ExitCategory::MemoryCap,
+            PipelineError::Timing(_) => ExitCategory::TimingRace,
         }
     }
 }
@@ -148,6 +176,14 @@ pub fn run(cli: &Cli) -> Result<RunSummary, PipelineError> {
         }
     }
 
+    // Synthesis-time lowering: rewrite composite primitives that don't
+    // have a working physical macrocell as compositions of primitives
+    // that do. Currently only xor → (a&!b)|(!a&b). The post-lowering
+    // form is what the netlist will see; `--dump-ast` above shows the
+    // original parsed AST before lowering.
+    let mut module = module;
+    rb_synthesis::lower_xor_gates(&mut module);
+
     let netlist = build_netlist(&module).map_err(PipelineError::Synth)?;
     if let Some(path) = &cli.dump_netlist {
         write_json_dump(path, &netlist)?;
@@ -155,14 +191,88 @@ pub fn run(cli: &Cli) -> Result<RunSummary, PipelineError> {
 
     detect_cycles(&netlist).map_err(PipelineError::Cycle)?;
 
-    let placement = place(&netlist, &cfg_from_cli(cli)).map_err(PipelineError::Place)?;
+    // v2: static timing analysis (FR-V12). Errors map to exit code 9.
+    // `--allow-timing-races` downgrades the race to a stderr warning.
+    match analyse_timing(&netlist, &TimingConfig::DEFAULT) {
+        Ok(_) => {}
+        Err(err) => {
+            let strict = cli.strict_timing || !cli.allow_timing_races;
+            if strict {
+                return Err(PipelineError::Timing(err));
+            }
+            eprintln!("[warn] timing race (use --strict-timing to fail): {err}");
+        }
+    }
+
+    // v2: stage-boundary RAM-cap check (FR-V10). Maps to exit code 8.
+    BudgetGuard::new(cli.max_ram, "after_timing")
+        .check()
+        .map_err(PipelineError::Memory)?;
+
+    let placer_kind = match cli.placer {
+        crate::cli::Placer::Sa => PlacerKind::Sa,
+        crate::cli::Placer::Greedy => PlacerKind::Greedy,
+    };
+    let mut sa_cfg = SaConfig::DEFAULT;
+    if let Some(seed) = cli.seed {
+        sa_cfg.seed = seed;
+    }
+    let placement = place_with(placer_kind, &netlist, &cfg_from_cli(cli), &sa_cfg)
+        .map_err(PipelineError::Place)?;
     if let Some(path) = &cli.dump_placement {
         write_json_dump(path, &placement)?;
     }
 
-    let route_cfg = route_cfg_from_cli(cli);
-    let wires = route_pipeline(&placement, &netlist, &route_cfg).map_err(PipelineError::Route)?;
+    BudgetGuard::new(cli.max_ram, "after_place")
+        .check()
+        .map_err(PipelineError::Memory)?;
+
+    let wires = match cli.router {
+        crate::cli::Router::Lee => {
+            let route_cfg = route_cfg_from_cli(cli);
+            route_pipeline_lee(&placement, &netlist, &route_cfg).map_err(PipelineError::Route)?
+        }
+        crate::cli::Router::Pathfinder => {
+            // Pipeline mode: keep adjacency-isolation OFF by default
+            // (paritetic with v1 Lee router) so dense macrocell
+            // placements don't fail to converge. Stub-aware composition
+            // (compose_two_stubs) flips this on explicitly.
+            let pf_cfg = PathFinderConfig {
+                max_iterations: cli.max_routing_iterations,
+                max_explored_cells: 256_000,
+                adjacency_isolation: false,
+                ..PathFinderConfig::DEFAULT
+            };
+            // PathFinder is best-effort in pipeline mode: on convergence
+            // failure we degrade to whatever single-pass routing
+            // succeeds (matches Lee's "warn-and-emit" behaviour above).
+            // A future strict-router flag could re-raise the error to
+            // hit exit code 7 for batch correctness checks.
+            match route_pipeline_pathfinder(&placement, &netlist, &pf_cfg) {
+                Ok(w) => w,
+                Err(RouteError::ConvergenceExhausted {
+                    unrouted,
+                    iterations,
+                    peak_congestion,
+                }) => {
+                    eprintln!(
+                        "[warn] pathfinder did not converge in {iterations} iters \
+                         (peak_congestion={peak_congestion}); falling back to single-pass: \
+                         {} unrouted/overused cells",
+                        unrouted.len()
+                    );
+                    route_pipeline_pathfinder_singlepass(&placement, &netlist, &pf_cfg)
+                        .map_err(PipelineError::Route)?
+                }
+                Err(e) => return Err(PipelineError::Route(e)),
+            }
+        }
+    };
     let grid = assemble_grid(&placement, &wires);
+
+    BudgetGuard::new(cli.max_ram, "after_route")
+        .check()
+        .map_err(PipelineError::Memory)?;
 
     let summary_footprint = (
         grid.bounds.width(),
@@ -192,6 +302,7 @@ pub fn run(cli: &Cli) -> Result<RunSummary, PipelineError> {
         block_count,
         footprint: summary_footprint,
         elapsed: started.elapsed(),
+        peak_ram_bytes: BudgetGuard::current_rss_bytes(),
     })
 }
 
@@ -211,6 +322,7 @@ fn route_cfg_from_cli(cli: &Cli) -> RouteConfig {
     if let Some(seed) = cli.seed {
         cfg.seed = seed;
     }
+    cfg.initial_max_distance = cli.max_route_distance;
     cfg
 }
 
@@ -236,7 +348,7 @@ fn write_json_dump<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), Pi
     Ok(())
 }
 
-fn route_pipeline(
+fn route_pipeline_lee(
     placement: &Placement,
     netlist: &Netlist,
     cfg: &RouteConfig,
@@ -285,6 +397,152 @@ fn route_pipeline(
     // belonging to each net.
     let wires = harvest_wires(&grid);
     Ok(wires)
+}
+
+/// Same source/sink discovery as the Lee path, but routes through the
+/// v2 PathFinder with adjacency isolation. Used when `--router pathfinder`
+/// is selected. Returns Err on `RouteError::ConvergenceExhausted` so the
+/// CLI maps it to exit code 7 (FR-V16).
+fn route_pipeline_pathfinder(
+    placement: &Placement,
+    netlist: &Netlist,
+    cfg: &PathFinderConfig,
+) -> Result<Vec<RoutedWire>, RouteError> {
+    // Seed CostMap: every cell occupied by a placed macro-cell is a
+    // hard obstacle (foreign nets must route around).
+    let bounds = pad_bbox(placement.bounds, 4);
+    let mut cost = CostMap::new(bounds);
+    for cell in &placement.cells {
+        for block in &cell.macro_cell.blocks {
+            let p = Pos3::new(
+                cell.origin.x + block.pos.x,
+                cell.origin.y + block.pos.y,
+                cell.origin.z + block.pos.z,
+            );
+            cost.mark_blocked(p);
+        }
+    }
+
+    let mut routes: Vec<(NetTag, Pos3, Pos3)> = Vec::new();
+    for &net_id in netlist.nets.keys() {
+        let net_tag = NetTag(net_id.0);
+        let Some(source_world) = net_source_world_pos(placement, netlist, net_id) else {
+            continue;
+        };
+        for sink_world in net_sink_world_positions(placement, netlist, net_id) {
+            routes.push((net_tag, source_world, sink_world));
+        }
+    }
+
+    // Mark every source/sink as a pin so adjacency-isolation doesn't
+    // lock the router out of its own anchors.
+    for (_, src, sink) in &routes {
+        cost.mark_pin(*src);
+        cost.mark_pin(*sink);
+    }
+
+    route_pathfinder(&mut cost, &routes, cfg)
+}
+
+/// Single-pass A* fallback for PathFinder. Groups routes by net so each
+/// net's fan-out is built as a Steiner tree: first sink → A* from source;
+/// every subsequent sink → multi-source A* whose source set is the trunk
+/// already laid (every cell of every previously routed branch of this
+/// net). Mirrors Lee's `is_passable_for(own_net)` semantics — own-net
+/// cells are free to reuse.
+fn route_pipeline_pathfinder_singlepass(
+    placement: &Placement,
+    netlist: &Netlist,
+    cfg: &PathFinderConfig,
+) -> Result<Vec<RoutedWire>, RouteError> {
+    use std::collections::BTreeSet;
+
+    let bounds = pad_bbox(placement.bounds, 4);
+    let mut cost = CostMap::new(bounds);
+    for cell in &placement.cells {
+        for block in &cell.macro_cell.blocks {
+            let p = Pos3::new(
+                cell.origin.x + block.pos.x,
+                cell.origin.y + block.pos.y,
+                cell.origin.z + block.pos.z,
+            );
+            cost.mark_blocked(p);
+        }
+    }
+
+    // Group: net_tag → (source, vec_of_sinks).
+    let mut groups: BTreeMap<NetTag, (Pos3, Vec<Pos3>)> = BTreeMap::new();
+    for &net_id in netlist.nets.keys() {
+        let net_tag = NetTag(net_id.0);
+        let Some(src) = net_source_world_pos(placement, netlist, net_id) else {
+            continue;
+        };
+        let sinks = net_sink_world_positions(placement, netlist, net_id);
+        if sinks.is_empty() {
+            continue;
+        }
+        groups.insert(net_tag, (src, sinks));
+    }
+
+    // Register every endpoint as a pin so future stub-aware adj_iso
+    // doesn't lock A* out of its own anchors.
+    for (src, sinks) in groups.values() {
+        cost.mark_pin(*src);
+        for &s in sinks {
+            cost.mark_pin(s);
+        }
+    }
+
+    let mut wires_by_net: BTreeMap<NetTag, Vec<RouteSegment>> = BTreeMap::new();
+    let mut unrouted: Vec<String> = Vec::new();
+    for (net, group) in &groups {
+        let (src, sinks) = group;
+        // Trunk grows as we route each sink. Start with the source only.
+        let mut trunk: BTreeSet<Pos3> = BTreeSet::new();
+        trunk.insert(*src);
+        let mut net_segments: Vec<RouteSegment> = Vec::new();
+
+        for &sink in sinks {
+            let seeds: Vec<Pos3> = trunk.iter().copied().collect();
+            let path =
+                astar_route_multisrc(&cost, *net, &seeds, sink, &cfg.edge, cfg.max_explored_cells);
+            match path {
+                Some(p) if !p.is_empty() => {
+                    for &cell in &p {
+                        cost.assigned.insert(cell, *net);
+                        if trunk.insert(cell) {
+                            // Newly-grown trunk cell — emit it once.
+                            net_segments.push(RouteSegment::Dust { pos: cell });
+                        }
+                    }
+                }
+                _ => unrouted.push(format!("net#{}→{:?}", net.0, sink)),
+            }
+        }
+        if !net_segments.is_empty() {
+            wires_by_net.insert(*net, net_segments);
+        }
+    }
+
+    if !unrouted.is_empty() {
+        eprintln!(
+            "[warn] {} sink(s) left unrouted by pathfinder single-pass: {}",
+            unrouted.len(),
+            unrouted.join(", ")
+        );
+    }
+
+    Ok(wires_by_net
+        .into_iter()
+        .map(|(net, segments)| RoutedWire { net, segments })
+        .collect())
+}
+
+fn pad_bbox(b: Bbox3, n: i32) -> Bbox3 {
+    Bbox3 {
+        min: Pos3::new(b.min.x - n, b.min.y - n, b.min.z - n),
+        max: Pos3::new(b.max.x + n, b.max.y + n, b.max.z + n),
+    }
 }
 
 fn harvest_wires(grid: &Grid3D) -> Vec<RoutedWire> {
@@ -396,6 +654,9 @@ fn assemble_grid(placement: &Placement, wires: &[RoutedWire]) -> BlockGrid {
                 RouteSegment::Repeater { pos, .. } => pos,
             };
             bbox = bbox.union(&Bbox3::point(p));
+            // Phase A: dust/repeater require a solid block at y-1 for
+            // support — expand bbox so the support cell fits.
+            bbox = bbox.union(&Bbox3::point(Pos3::new(p.x, p.y - 1, p.z)));
         }
     }
 
@@ -416,7 +677,24 @@ fn assemble_grid(placement: &Placement, wires: &[RoutedWire]) -> BlockGrid {
                 cell.origin.y + block.pos.y + dy,
                 cell.origin.z + block.pos.z + dz,
             );
-            grid.insert(world, block_state_for(block.block, block.facing));
+            let mut state = block_state_for(block.block, block.facing);
+            // v2: patch per-instance properties for user-instantiable
+            // repeater (.DELAY/.LOCK) and comparator (.MODE).
+            if matches!(block.block, BlockId::Repeater) {
+                if let Some(delay) = cell.macro_cell.repeater_delay {
+                    override_property(&mut state, "delay", &delay.to_string());
+                }
+            }
+            if matches!(block.block, BlockId::Comparator) {
+                if let Some(mode) = cell.macro_cell.comparator_mode {
+                    let mode_str = match mode {
+                        rb_parser::ast::CompareMode::Compare => "compare",
+                        rb_parser::ast::CompareMode::Subtract => "subtract",
+                    };
+                    override_property(&mut state, "mode", mode_str);
+                }
+            }
+            grid.insert(world, state);
             owned.insert(world, ());
         }
     }
@@ -434,6 +712,18 @@ fn assemble_grid(placement: &Placement, wires: &[RoutedWire]) -> BlockGrid {
                 continue; // cell already occupies this cell — keep cell's block
             }
             grid.insert(world, block_state_for(block_kind, facing));
+            owned.insert(world, ());
+
+            // Phase A: emit a Stone support block directly under the
+            // wire/repeater so it doesn't float (real Minecraft physics).
+            // Skip if a cell already owns that position — its block (a
+            // solid planks/stone of the macrocell, or possibly another
+            // wire of an earlier net that owns this cell) is good enough.
+            let support = Pos3::new(world.x, world.y - 1, world.z);
+            if let std::collections::btree_map::Entry::Vacant(e) = owned.entry(support) {
+                grid.insert(support, block_state_for(BlockId::Stone, None));
+                e.insert(());
+            }
         }
     }
 

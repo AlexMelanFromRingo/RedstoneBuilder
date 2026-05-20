@@ -1,0 +1,4 @@
+// OR-only sanity demo: q = a OR b.
+module or_demo(input a, input b, output q);
+    or g(.A(a), .B(b), .Y(q));
+endmodule

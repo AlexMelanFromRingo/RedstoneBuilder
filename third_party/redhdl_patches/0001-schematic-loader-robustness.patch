@@ -1,0 +1,191 @@
+diff --git a/redhdl/netlist/schematic_instance.py b/redhdl/netlist/schematic_instance.py
+index 4a5ffe5..2a7e8fa 100644
+--- a/redhdl/netlist/schematic_instance.py
++++ b/redhdl/netlist/schematic_instance.py
+@@ -103,22 +103,89 @@ from redhdl.voxel.schematic import Schematic
+ 
+ 
+ def glass_corner_positions(schem: Schematic) -> tuple[Pos, Pos]:
+-    # Select the outer-most glass parts.
+-    glass_pos_blocks = PositionalData(
+-        (pos, block)
++    """
++    Find the 2 opposing-corner glass marker blocks that delimit a stub
++    schematic's padded region.
++
++    Convention (per module docstring): the stub is enclosed by 2 glass
++    blocks at opposing corners of an axis-aligned bounding box, with
++    the schematic-name sign on the front face of one of them
++    (`bottom_right_pos`).
++
++    Handles three real-world deviations seen in
++    `redhdl/schematics/*.schem`:
++      1. Plain `minecraft:glass` may be replaced with
++         `*_stained_glass` variants — recognise any block whose type
++         contains the substring "glass".
++      2. The 2 glass corners may sit on any of the 4 main diagonals
++         of the AABB, not just the (min,min,min)-(max,max,max) one
++         (e.g. `adder.schem` has glass at (8,0,0) and (0,19,9)). We
++         pick them by proximity to the name sign rather than asserting
++         they're at the elem-wise min/max.
++      3. The schematic may have multiple glass blocks (>2) for
++         decoration or labelling (`or.schem` has 16 stained-glass
++         I/O labels). We exclude those by requiring a candidate to be
++         within 2 cells of the name sign.
++
++    Raises `ValueError` if no usable glass+sign pair is found — caller
++    should skip this stub gracefully.
++    """
++    # Collect every glass-variant block.
++    glass_positions = [
++        pos
+         for pos, block in schem.pos_blocks.items()
+-        if block.block_type == "minecraft:glass"
+-    )
++        if "glass" in block.block_type
++    ]
++    if not glass_positions:
++        raise ValueError("no glass marker blocks (any glass variant)")
+ 
+-    bottom_right_pos, top_left_pos = (
+-        glass_pos_blocks.min_pos(),
+-        glass_pos_blocks.max_pos(),
+-    )
++    # Find the schematic-name sign. Convention: its first text line is
++    # the module name; port-pin signs start with "input " or "output ".
++    name_sign_candidates = [
++        (pos, lines)
++        for pos, lines in schem.pos_sign_lines.items()
++        if lines
++        and lines[0]
++        and not lines[0].startswith(("input ", "output ", "Created by"))
++    ]
++    if not name_sign_candidates:
++        raise ValueError(
++            "no schematic-name sign found (need a sign whose first line "
++            "is the module name)"
++        )
++
++    # Pick the name sign that's closest (Manhattan distance) to any
++    # glass block. Disambiguates when there are multiple non-port signs
++    # (e.g. credit signs).
++    def min_glass_dist(sign_pos: Pos) -> int:
++        return min((sign_pos - g).l1() for g in glass_positions)
+ 
+-    # TODO: This is terrible.
+-    assert (
+-        bottom_right_pos in glass_pos_blocks and top_left_pos in glass_pos_blocks
+-    ), "Template schematic loading is currently dumb; pls reformat glass corners."
++    name_sign_pos, _ = min(name_sign_candidates, key=lambda kv: min_glass_dist(kv[0]))
++
++    # bottom_right_pos: the glass block adjacent (within 1 cell) to
++    # the name sign. The sign sits on its front face.
++    adjacent_glass = [g for g in glass_positions if (g - name_sign_pos).l1() <= 1]
++    if not adjacent_glass:
++        raise ValueError(
++            f"no glass block adjacent to name sign at {name_sign_pos}"
++        )
++    bottom_right_pos = adjacent_glass[0]
++
++    # top_left_pos: another glass block, preferring one that's far from
++    # BR (so BR/TL span a real 3D region rather than degenerating). Fall
++    # back to the schematic-wide elem-max of glass if needed.
++    far_glass = [g for g in glass_positions if g != bottom_right_pos]
++    if far_glass:
++        # Pick the one farthest from BR.
++        top_left_pos = max(far_glass, key=lambda g: (g - bottom_right_pos).l1())
++    else:
++        # Single glass block — degenerate, fall back to schematic bbox.
++        all_positions = list(schem.pos_blocks.keys())
++        top_left_pos = Pos(
++            max(p.x for p in all_positions),
++            max(p.y for p in all_positions),
++            max(p.z for p in all_positions),
++        )
+ 
+     return bottom_right_pos, top_left_pos
+ 
+@@ -145,14 +212,39 @@ def port_type_name_index(sign_text: str) -> tuple[PortType, str, int]:
+ 
+ def schematic_instance_from_schem(schem: Schematic) -> SchematicInstance:
+     """ """
+-    # Establish core and padded regions
++    # Establish core and padded regions. BR and TL come from
++    # `glass_corner_positions`; we normalise so padded_region is a
++    # proper axis-aligned bbox regardless of which corners the
++    # author placed the glass on.
+     bottom_right_pos, top_right_pos = glass_corner_positions(schem)
+-    padded_region = RectangularPrism(bottom_right_pos, top_right_pos)
++    bbox_min = Pos.elem_min(bottom_right_pos, top_right_pos)
++    bbox_max = Pos.elem_max(bottom_right_pos, top_right_pos)
++    padded_region = RectangularPrism(bbox_min, bbox_max)
+     core_region = RectangularPrism(
+         padded_region.min_pos + Pos(1, 1, 1), padded_region.max_pos - Pos(1, 1, 1)
+     )
+ 
+-    overall_sign_lines = schem.pos_sign_lines[bottom_right_pos - Pos(0, 0, 1)]
++    # The schematic-name sign sits on one of BR's 6 faces. Different
++    # stubs in the wild orient it differently (and_h8b uses -Z,
++    # adder uses +X). Probe all 6 candidates.
++    name_sign_pos = None
++    for offset in [
++        Pos(0, 0, -1), Pos(0, 0, 1),
++        Pos(-1, 0, 0), Pos(1, 0, 0),
++        Pos(0, -1, 0), Pos(0, 1, 0),
++    ]:
++        candidate = bottom_right_pos + offset
++        if candidate in schem.pos_sign_lines:
++            sign_text = (schem.pos_sign_lines[candidate] or [""])[0]
++            if sign_text and not sign_text.startswith(("input ", "output ", "Created by")):
++                name_sign_pos = candidate
++                break
++    if name_sign_pos is None:
++        raise ValueError(
++            f"no schematic-name sign adjacent to the glass corner at "
++            f"{bottom_right_pos}"
++        )
++    overall_sign_lines = schem.pos_sign_lines[name_sign_pos]
+     schem_name = overall_sign_lines[0]
+ 
+     # Schematic should be the core, plus the padded region, minus any glass.
+@@ -163,11 +255,16 @@ def schematic_instance_from_schem(schem: Schematic) -> SchematicInstance:
+     normalized_offset = -core_schem.rect_region().min_pos
+ 
+     # Get sign metadata.
++    # Port-pin signs by convention start with "input ..." or
++    # "output ...". The original filter only checked signs OUTSIDE
++    # padded_region, but some stubs (e.g. adder.schem) have port
++    # signs INSIDE the bbox we infer from the glass corners. Search
++    # the whole schematic and rely on the prefix to discriminate.
+     pos_port_type_name_index = {
+         pos: port_type_name_index(lines[0])
+-        for pos, lines in (schem - padded_region).pos_sign_lines.items()
++        for pos, lines in schem.pos_sign_lines.items()
+         if len(lines) > 0
+-        and (lines[0].startswith("input") or lines[0].startswith("output"))
++        and (lines[0].startswith("input ") or lines[0].startswith("output "))
+     }
+ 
+     port_type: dict[str, PortType] = {}
+diff --git a/redhdl/voxel/region.py b/redhdl/voxel/region.py
+index 6c96fb9..e1a883f 100644
+--- a/redhdl/voxel/region.py
++++ b/redhdl/voxel/region.py
+@@ -756,10 +756,17 @@ class CompositeRegion(Region):
+ 
+     @cached_property
+     def min_pos(self) -> Pos:  # type: ignore
++        if not self.subregions:
++            # An empty composite has no extent. Use a sentinel that
++            # makes `intersects()` return False for any non-empty
++            # region (min > max → fast-AABB-fail).
++            return Pos(1, 1, 1)
+         return Pos.elem_min(*(region.min_pos for region in self.subregions))
+ 
+     @cached_property
+     def max_pos(self) -> Pos:  # type: ignore
++        if not self.subregions:
++            return Pos(0, 0, 0)
+         return Pos.elem_max(*(region.max_pos for region in self.subregions))
+ 
+     def shifted(self, offset: Pos) -> Region:

@@ -1,0 +1,8 @@
+// v2 analog-arithmetic example.
+//
+// Subtract-mode comparator: Y = max(0, A - B). Drive A and B with
+// signal-strength sources (e.g., comparator-from-item-frame) and the
+// output reads the arithmetic difference clamped to 0..=15.
+module analog_add(input analog wire a, input analog wire b, output analog wire sum);
+    comparator c1(.A(a), .B(b), .Y(sum), .MODE(subtract));
+endmodule

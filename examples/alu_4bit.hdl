@@ -1,0 +1,130 @@
+// 4-bit Arithmetic Logic Unit — V3 Milestone 3.
+//
+// Built entirely from the basic gate primitives (and / or / not / xor);
+// SUB and the operation MUX are *not* separate stubs — they are
+// classic combinational constructions:
+//
+//   SUB : two's complement.  A - B = A + (~B) + 1.
+//         One ripple adder serves both ADD and SUB: the second
+//         operand is B XOR sub_mode and the carry-in is sub_mode,
+//         so sub_mode = 1 turns A + B into A + (~B) + 1.
+//
+//   MUX : one-hot select.  y = (sel_arith & arith) | (sel_and & and)
+//                              | (sel_or & or).
+//         The 2-bit opcode is decoded into one-hot enables; each
+//         result lane is AND-masked by its enable and the lanes are
+//         OR-combined.
+//
+// Opcodes (op1 op0):
+//   00  ADD   y = a + b
+//   01  SUB   y = a - b
+//   10  AND   y = a & b   (bitwise)
+//   11  OR    y = a | b   (bitwise)
+//
+// `cout` is the carry-out of the arithmetic block, valid for ADD/SUB
+// only (masked to 0 for the logic ops).
+//
+// ~58 gate instances; ~106 after synthesis-time XOR lowering — the
+// same scale class as ripple_adder_8bit. Compile with the v2 router:
+//   redstonebuilder examples/alu_4bit.hdl -o alu.litematic \
+//       --router pathfinder --max-footprint 512x48x512
+module alu_4bit(
+    input a0, input a1, input a2, input a3,
+    input b0, input b1, input b2, input b3,
+    input op0, input op1,
+    output y0, output y1, output y2, output y3,
+    output cout
+);
+    wire nop0, nop1, sub_mode, and_active, or_active;
+    wire bx0, bx1, bx2, bx3;
+    wire abx0, abx1, abx2, abx3;
+    wire sum0, sum1, sum2, sum3;
+    wire g0, g1, g2, g3;
+    wire p0, p1, p2, p3;
+    wire c1, c2, c3, c4;
+    wire and0, and1, and2, and3;
+    wire or0, or1, or2, or3;
+    wire ag0, ag1, ag2, ag3;
+    wire ng0, ng1, ng2, ng3;
+    wire og0, og1, og2, og3;
+    wire m0, m1, m2, m3;
+
+    // ── opcode decode ───────────────────────────────────────────────
+    // nop1 doubles as the "arithmetic active" enable (op1 == 0).
+    not d_n0(.A(op0), .Y(nop0));
+    not d_n1(.A(op1), .Y(nop1));
+    and d_sub(.A(nop1), .B(op0), .Y(sub_mode));     // op == 01
+    and d_and(.A(op1), .B(nop0), .Y(and_active));   // op == 10
+    and d_or(.A(op1), .B(op0), .Y(or_active));      // op == 11
+
+    // ── second operand: B XOR sub_mode (invert B when subtracting) ──
+    xor bx_0(.A(b0), .B(sub_mode), .Y(bx0));
+    xor bx_1(.A(b1), .B(sub_mode), .Y(bx1));
+    xor bx_2(.A(b2), .B(sub_mode), .Y(bx2));
+    xor bx_3(.A(b3), .B(sub_mode), .Y(bx3));
+
+    // ── ripple-carry adder, carry-in = sub_mode ─────────────────────
+    // bit 0
+    xor fa0_x1(.A(a0), .B(bx0), .Y(abx0));
+    xor fa0_x2(.A(abx0), .B(sub_mode), .Y(sum0));
+    and fa0_a1(.A(a0), .B(bx0), .Y(g0));
+    and fa0_a2(.A(abx0), .B(sub_mode), .Y(p0));
+    or  fa0_o1(.A(g0), .B(p0), .Y(c1));
+    // bit 1
+    xor fa1_x1(.A(a1), .B(bx1), .Y(abx1));
+    xor fa1_x2(.A(abx1), .B(c1), .Y(sum1));
+    and fa1_a1(.A(a1), .B(bx1), .Y(g1));
+    and fa1_a2(.A(abx1), .B(c1), .Y(p1));
+    or  fa1_o1(.A(g1), .B(p1), .Y(c2));
+    // bit 2
+    xor fa2_x1(.A(a2), .B(bx2), .Y(abx2));
+    xor fa2_x2(.A(abx2), .B(c2), .Y(sum2));
+    and fa2_a1(.A(a2), .B(bx2), .Y(g2));
+    and fa2_a2(.A(abx2), .B(c2), .Y(p2));
+    or  fa2_o1(.A(g2), .B(p2), .Y(c3));
+    // bit 3
+    xor fa3_x1(.A(a3), .B(bx3), .Y(abx3));
+    xor fa3_x2(.A(abx3), .B(c3), .Y(sum3));
+    and fa3_a1(.A(a3), .B(bx3), .Y(g3));
+    and fa3_a2(.A(abx3), .B(c3), .Y(p3));
+    or  fa3_o1(.A(g3), .B(p3), .Y(c4));
+
+    // ── bitwise logic lanes ─────────────────────────────────────────
+    and l_and0(.A(a0), .B(b0), .Y(and0));
+    and l_and1(.A(a1), .B(b1), .Y(and1));
+    and l_and2(.A(a2), .B(b2), .Y(and2));
+    and l_and3(.A(a3), .B(b3), .Y(and3));
+    or  l_or0(.A(a0), .B(b0), .Y(or0));
+    or  l_or1(.A(a1), .B(b1), .Y(or1));
+    or  l_or2(.A(a2), .B(b2), .Y(or2));
+    or  l_or3(.A(a3), .B(b3), .Y(or3));
+
+    // ── one-hot output MUX (arith / and / or) ───────────────────────
+    // bit 0
+    and mx_ag0(.A(nop1), .B(sum0), .Y(ag0));
+    and mx_ng0(.A(and_active), .B(and0), .Y(ng0));
+    and mx_og0(.A(or_active), .B(or0), .Y(og0));
+    or  mx_m0(.A(ag0), .B(ng0), .Y(m0));
+    or  mx_y0(.A(m0), .B(og0), .Y(y0));
+    // bit 1
+    and mx_ag1(.A(nop1), .B(sum1), .Y(ag1));
+    and mx_ng1(.A(and_active), .B(and1), .Y(ng1));
+    and mx_og1(.A(or_active), .B(or1), .Y(og1));
+    or  mx_m1(.A(ag1), .B(ng1), .Y(m1));
+    or  mx_y1(.A(m1), .B(og1), .Y(y1));
+    // bit 2
+    and mx_ag2(.A(nop1), .B(sum2), .Y(ag2));
+    and mx_ng2(.A(and_active), .B(and2), .Y(ng2));
+    and mx_og2(.A(or_active), .B(or2), .Y(og2));
+    or  mx_m2(.A(ag2), .B(ng2), .Y(m2));
+    or  mx_y2(.A(m2), .B(og2), .Y(y2));
+    // bit 3
+    and mx_ag3(.A(nop1), .B(sum3), .Y(ag3));
+    and mx_ng3(.A(and_active), .B(and3), .Y(ng3));
+    and mx_og3(.A(or_active), .B(or3), .Y(og3));
+    or  mx_m3(.A(ag3), .B(ng3), .Y(m3));
+    or  mx_y3(.A(m3), .B(og3), .Y(y3));
+
+    // ── carry-out, valid for ADD/SUB only ───────────────────────────
+    and o_cout(.A(c4), .B(nop1), .Y(cout));
+endmodule

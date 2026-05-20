@@ -1,0 +1,4 @@
+// AND-only sanity demo: q = a AND b.
+module and_demo(input a, input b, output q);
+    and g(.A(a), .B(b), .Y(q));
+endmodule

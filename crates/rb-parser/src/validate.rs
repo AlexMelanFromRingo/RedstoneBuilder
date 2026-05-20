@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use miette::{NamedSource, SourceSpan as MietteSpan};
-use rb_core::{GateKind, SourceSpan};
+use rb_core::{GateKind, SignalKind, SourceSpan};
 
 use crate::ast::{GateInst, Ident, Module, PortDir};
 use crate::error::SemanticError;
@@ -26,8 +26,23 @@ pub fn validate(module: &Module, source: &str) -> Result<(), Vec<SemanticError>>
         check_duplicate(&wire.name, &mut declared, &mut errors, source, &file_name);
     }
 
+    // Build a SignalKind lookup keyed by net name so we can check
+    // analog/boolean mismatches without per-connection re-traversal.
+    let mut net_kind: HashMap<&str, SignalKind> = HashMap::new();
+    for port in &module.ports {
+        net_kind.insert(port.name.as_str(), port.kind);
+    }
+    for wire in &module.wires {
+        net_kind.insert(wire.name.as_str(), wire.kind);
+    }
+
     for inst in &module.instances {
         for conn in &inst.connections {
+            // Integer-literal targets (e.g. `.DELAY(3)` on a repeater)
+            // are not nets and must not trigger UndeclaredNet.
+            if is_integer_literal(conn.net.as_str()) {
+                continue;
+            }
             if !declared.contains_key(conn.net.as_str()) {
                 errors.push(SemanticError::UndeclaredNet {
                     name: conn.net.as_str().to_string(),
@@ -37,6 +52,8 @@ pub fn validate(module: &Module, source: &str) -> Result<(), Vec<SemanticError>>
             }
         }
         check_gate_ports(inst, &mut errors, source, &file_name);
+        check_signal_kind(inst, &net_kind, &mut errors, source, &file_name);
+        check_repeater_delay(inst, &mut errors, source, &file_name);
     }
 
     let drivers = count_drivers(module);
@@ -98,16 +115,99 @@ fn count_drivers(module: &Module) -> HashMap<String, usize> {
     drivers
 }
 
-/// The canonical name of the *output* port for each combinational kind.
+/// The canonical name of the *output* port for each gate kind.
 fn output_port_name(kind: GateKind) -> &'static str {
     match kind {
-        GateKind::And | GateKind::Or | GateKind::Not | GateKind::Xor => "Y",
+        GateKind::And | GateKind::Or | GateKind::Not | GateKind::Xor | GateKind::Comparator => "Y",
         GateKind::DTrigger | GateKind::MemoryCell => "Q",
-        // Forward-compat: any future GateKind variant needs its own
-        // output-port name; we treat unknowns as "Y" so validation
-        // still runs (it just may misattribute drivers). The synthesizer
-        // is the real gate.
+        GateKind::Observer | GateKind::Repeater | GateKind::TargetBlock => "OUT",
+        // Forward-compat: any future GateKind variant gets "Y" by
+        // default; validate stays running (may misattribute drivers).
         _ => "Y",
+    }
+}
+
+/// v2: enforce that a wire's declared SignalKind matches the kind the
+/// instantiating gate expects on each port.
+fn check_signal_kind(
+    inst: &GateInst,
+    net_kind: &HashMap<&str, SignalKind>,
+    errors: &mut Vec<SemanticError>,
+    source: &str,
+    file_name: &str,
+) {
+    for conn in &inst.connections {
+        // Skip integer-literal targets (e.g. .DELAY(3) on a repeater).
+        if is_integer_literal(conn.net.as_str()) {
+            continue;
+        }
+        let Some(&found) = net_kind.get(conn.net.as_str()) else {
+            continue; // UndeclaredNet already reported by the caller.
+        };
+        let expected = expected_signal_kind(inst.kind, conn.port.as_str());
+        if !signal_kinds_compatible(expected, found) {
+            errors.push(SemanticError::SignalKindMismatch {
+                name: conn.net.as_str().to_string(),
+                inst: inst.inst_name.as_str().to_string(),
+                found: format!("{found:?}"),
+                expected: format!("{expected:?}"),
+                at: span_to_miette(&conn.net.span),
+                src: NamedSource::new(file_name, source.to_string()),
+            });
+        }
+    }
+}
+
+fn is_integer_literal(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
+}
+
+fn expected_signal_kind(kind: GateKind, _port: &str) -> SignalKind {
+    // For v2 the only kind-check we enforce is: analog wires must not
+    // be silently fed into strictly-boolean combinational gates. So
+    // boolean-only gates expect Boolean; comparator (the analog
+    // primitive) expects AnalogStrength. Everything else (observer,
+    // repeater, target_block, stateful primitives) is treated as
+    // kind-agnostic for v2 — they accept any wire kind.
+    match kind {
+        GateKind::Comparator => SignalKind::AnalogStrength,
+        GateKind::And | GateKind::Or | GateKind::Not | GateKind::Xor => SignalKind::Boolean,
+        _ => SignalKind::Boolean, // permissive: kind-mismatch never fires for non-bool gates
+    }
+}
+
+/// True iff a wire carrying `found` is allowed at a port expecting
+/// `expected`. Only one strict rejection in v2: an analog wire feeding
+/// a strictly-boolean gate input — the gate would silently lose the
+/// analog information. All other cross-kind connections (boolean →
+/// analog, edge → boolean, etc.) are accepted.
+fn signal_kinds_compatible(expected: SignalKind, found: SignalKind) -> bool {
+    !matches!(
+        (expected, found),
+        (SignalKind::Boolean, SignalKind::AnalogStrength)
+    )
+}
+
+/// v2: enforce repeater `.DELAY(N)` is in `1..=4`.
+fn check_repeater_delay(
+    inst: &GateInst,
+    errors: &mut Vec<SemanticError>,
+    source: &str,
+    file_name: &str,
+) {
+    if inst.kind != GateKind::Repeater {
+        return;
+    }
+    let Some(delay) = inst.repeater_delay else {
+        return;
+    };
+    if !(1..=4).contains(&delay) {
+        errors.push(SemanticError::BadDelay {
+            inst: inst.inst_name.as_str().to_string(),
+            actual: u32::from(delay),
+            at: span_to_miette(&inst.span),
+            src: NamedSource::new(file_name, source.to_string()),
+        });
     }
 }
 
@@ -117,12 +217,16 @@ fn check_gate_ports(
     source: &str,
     file_name: &str,
 ) {
-    let (required_inputs, output) = match inst.kind {
-        GateKind::Not => (vec!["A"], "Y"),
-        GateKind::And | GateKind::Or | GateKind::Xor => (vec!["A", "B"], "Y"),
-        GateKind::DTrigger => (vec!["D", "CLK"], "Q"),
-        GateKind::MemoryCell => (vec!["DATA", "WRITE"], "Q"),
-        _ => return, // Post-MVP primitives (e.g., Comparator, Observer)
+    let (required_inputs, output, optional_inputs): (Vec<&str>, &str, &[&str]) = match inst.kind {
+        GateKind::Not => (vec!["A"], "Y", &[]),
+        GateKind::And | GateKind::Or | GateKind::Xor => (vec!["A", "B"], "Y", &[]),
+        GateKind::DTrigger => (vec!["D", "CLK"], "Q", &[]),
+        GateKind::MemoryCell => (vec!["DATA", "WRITE"], "Q", &[]),
+        GateKind::Comparator => (vec!["A", "B"], "Y", &[]),
+        GateKind::Observer => (vec!["WATCH"], "OUT", &[]),
+        GateKind::Repeater => (vec!["IN"], "OUT", &["DELAY", "LOCK"]),
+        GateKind::TargetBlock => (vec!["IN"], "OUT", &[]),
+        _ => return,
     };
 
     let mut seen_inputs: Vec<&str> = Vec::new();
@@ -138,6 +242,11 @@ fn check_gate_ports(
             .any(|req| req.eq_ignore_ascii_case(p))
         {
             seen_inputs.push(p);
+        } else if optional_inputs
+            .iter()
+            .any(|opt| opt.eq_ignore_ascii_case(p))
+        {
+            // Optional port — present but not required. No error.
         } else {
             unknown.push(p);
         }

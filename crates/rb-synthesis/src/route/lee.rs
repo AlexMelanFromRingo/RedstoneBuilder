@@ -309,20 +309,23 @@ fn annotate_with_repeaters(path: &[Pos3]) -> Vec<RouteSegment> {
 }
 
 fn facing_for(path: &[Pos3], i: usize) -> Direction {
+    // MC convention: `facing` on a repeater is the direction the BACK
+    // (input) side points = OPPOSITE of the signal-flow direction.
+    // Signal flows from prev to cur, so `facing` is the opposite.
     let prev = if i == 0 { path[0] } else { path[i - 1] };
     let cur = path[i];
     let dx = cur.x - prev.x;
     let dz = cur.z - prev.z;
     if dx > 0 {
-        Direction::East
-    } else if dx < 0 {
         Direction::West
-    } else if dz > 0 {
-        Direction::South
-    } else if dz < 0 {
-        Direction::North
-    } else {
+    } else if dx < 0 {
         Direction::East
+    } else if dz > 0 {
+        Direction::North
+    } else if dz < 0 {
+        Direction::South
+    } else {
+        Direction::West
     }
 }
 
