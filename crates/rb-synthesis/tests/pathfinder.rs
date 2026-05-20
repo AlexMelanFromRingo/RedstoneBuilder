@@ -120,3 +120,38 @@ fn adjacency_isolation_off_lets_parallel_nets_share_plane() {
         }
     }
 }
+
+#[test]
+fn stall_limit_aborts_before_max_iterations() {
+    // 4 nets jammed through a 1-cell corridor never converge. With a
+    // high max_iterations but a low stall_limit, PathFinder must give
+    // up after roughly stall_limit iterations, not max_iterations.
+    let mut cost = CostMap::new(Bbox3::from_corners(Pos3::new(0, 0, 0), Pos3::new(3, 0, 1)));
+    let routes: Vec<(NetTag, Pos3, Pos3)> = (0..4u32)
+        .map(|i| {
+            (
+                NetTag(i),
+                Pos3::new(0, 0, i as i32 % 2),
+                Pos3::new(3, 0, i as i32 % 2),
+            )
+        })
+        .collect();
+
+    let cfg = PathFinderConfig {
+        max_iterations: 1000,
+        stall_limit: 3,
+        ..PathFinderConfig::DEFAULT
+    };
+    let err =
+        route_pathfinder(&mut cost, &routes, &cfg).expect_err("dense corridor must not converge");
+    match err {
+        RouteError::ConvergenceExhausted { iterations, .. } => {
+            // Bailed via the stall guard — far below max_iterations.
+            assert!(
+                iterations < 50,
+                "stall guard should abort early, took {iterations} iterations"
+            );
+        }
+        other => panic!("expected ConvergenceExhausted, got {other:?}"),
+    }
+}

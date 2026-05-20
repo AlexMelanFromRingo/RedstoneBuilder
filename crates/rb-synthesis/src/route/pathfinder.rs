@@ -39,6 +39,12 @@ pub struct PathFinderConfig {
     /// off only for cosmetic/visualisation routing where MC
     /// correctness is not required.
     pub adjacency_isolation: bool,
+    /// Early-stop guard: if the congestion metric (over-used +
+    /// unrouted cells) fails to improve for this many consecutive
+    /// iterations, abort instead of grinding out every
+    /// `max_iterations`. A non-converging large design otherwise
+    /// burns the full iteration budget for nothing. `0` disables it.
+    pub stall_limit: u32,
 }
 
 impl PathFinderConfig {
@@ -52,6 +58,7 @@ impl PathFinderConfig {
         present_growth: 2,
         max_explored_cells: 64_000,
         adjacency_isolation: true,
+        stall_limit: 6,
     };
 }
 
@@ -71,6 +78,10 @@ pub fn route_pathfinder(
     }
 
     let mut attempt: u32 = 0;
+    // Early-stop bookkeeping: best congestion seen, and how many
+    // consecutive iterations have failed to beat it.
+    let mut best_congestion: usize = usize::MAX;
+    let mut stale: u32 = 0;
 
     loop {
         cost.clear_iteration_state();
@@ -200,7 +211,17 @@ pub fn route_pathfinder(
 
         let _ = committed; // committed of failed iteration is discarded; future enrichment slot
 
-        if attempt >= cfg.max_iterations {
+        // Track convergence progress for the early-stop guard.
+        let congestion = overused.len() + unrouted.len();
+        if congestion < best_congestion {
+            best_congestion = congestion;
+            stale = 0;
+        } else {
+            stale = stale.saturating_add(1);
+        }
+        let stalled = cfg.stall_limit != 0 && stale >= cfg.stall_limit;
+
+        if attempt >= cfg.max_iterations || stalled {
             return Err(RouteError::ConvergenceExhausted {
                 unrouted: if unrouted.is_empty() {
                     overused.iter().map(|p| format!("overuse@{p:?}")).collect()
