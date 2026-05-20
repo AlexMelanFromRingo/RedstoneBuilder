@@ -7,7 +7,19 @@ use rb_core::{GateKind, SignalKind, SourceSpan};
 use serde::Serialize;
 use smol_str::SmolStr;
 
-/// One source file's top-level module.
+/// A whole source file: one or more module definitions plus the index
+/// of the elaboration top (the last module not instantiated by any
+/// other). [`crate::parse`] flattens this into a single [`Module`]
+/// before returning, so most consumers never see a `Design`.
+#[derive(Debug, Clone, Serialize)]
+pub struct Design {
+    /// Every module defined in the file, in source order.
+    pub modules: Vec<Module>,
+    /// Index into `modules` of the elaboration top.
+    pub top: usize,
+}
+
+/// One module definition.
 #[derive(Debug, Clone, Serialize)]
 pub struct Module {
     /// Module name (the identifier after the `module` keyword).
@@ -19,7 +31,25 @@ pub struct Module {
     pub wires: Vec<WireDecl>,
     /// Gate instantiations in source order.
     pub instances: Vec<GateInst>,
+    /// Sub-module instantiations in source order (v3). Empty for a
+    /// flat module; resolved away by elaboration.
+    #[serde(default)]
+    pub mod_instances: Vec<ModuleInst>,
     /// Span covering the whole `module ... endmodule` block.
+    pub span: SourceSpan,
+}
+
+/// A sub-module instantiation: `<module> <inst>(.port(net), ...)`.
+#[derive(Debug, Clone, Serialize)]
+pub struct ModuleInst {
+    /// Name of the module being instantiated.
+    pub module_name: Ident,
+    /// Instance label, unique within the enclosing module.
+    pub inst_name: Ident,
+    /// Named-port connections binding the sub-module's ports to nets
+    /// in the enclosing module.
+    pub connections: Vec<Connection>,
+    /// Span covering the whole `<module> <inst>(...)` statement.
     pub span: SourceSpan,
 }
 

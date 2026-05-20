@@ -1,5 +1,6 @@
 //! Pest-driven parse of an HDL source file into [`Module`].
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -11,16 +12,28 @@ use rb_core::{GateKind, SignalKind, SourceSpan};
 use smol_str::SmolStr;
 
 use crate::ast::{
-    ClockEdge, CompareMode, Connection, Edge, GateInst, Ident, Module, Port, PortDir, WireDecl,
+    ClockEdge, CompareMode, Connection, Design, Edge, GateInst, Ident, Module, ModuleInst, Port,
+    PortDir, WireDecl,
 };
+use crate::elaborate::elaborate;
 use crate::error::ParseError;
 
 #[derive(Parser)]
 #[grammar = "hdl.pest"]
 struct HdlParser;
 
-/// Parse `source` (with `file_path` recorded for diagnostics) into an AST.
+/// Parse `source` (with `file_path` recorded for diagnostics) into a
+/// single flattened [`Module`]. Multi-module files are elaborated:
+/// sub-module instantiations are inlined into the top module.
 pub fn parse(source: &str, file_path: &Path) -> Result<Module, ParseError> {
+    let design = parse_design(source, file_path)?;
+    elaborate(design, file_path, source)
+}
+
+/// Parse `source` into a [`Design`] — every module definition in the
+/// file, plus the index of the elaboration top. Exposed for tooling
+/// that wants the un-elaborated hierarchy; the pipeline uses [`parse`].
+pub fn parse_design(source: &str, file_path: &Path) -> Result<Design, ParseError> {
     let file_arc: Arc<PathBuf> = Arc::new(file_path.to_path_buf());
 
     let mut pairs = HdlParser::parse(Rule::file, source).map_err(|err| {
@@ -38,16 +51,40 @@ pub fn parse(source: &str, file_path: &Path) -> Result<Module, ParseError> {
         src: NamedSource::new(file_display(file_path), source.to_string()),
     })?;
 
-    let module_pair = file_pair
+    let modules: Vec<Module> = file_pair
         .into_inner()
-        .find(|p| matches!(p.as_rule(), Rule::module_decl))
-        .ok_or_else(|| ParseError::Syntax {
-            message: "expected a top-level module".into(),
+        .filter(|p| matches!(p.as_rule(), Rule::module_decl))
+        .map(|p| build_module(p, &file_arc, source))
+        .collect();
+
+    if modules.is_empty() {
+        return Err(ParseError::Syntax {
+            message: "expected at least one module".into(),
             at: MietteSpan::from((0, 0)),
             src: NamedSource::new(file_display(file_path), source.to_string()),
-        })?;
+        });
+    }
 
-    Ok(build_module(module_pair, &file_arc, source))
+    let top = pick_top(&modules);
+    Ok(Design { modules, top })
+}
+
+/// The elaboration top is the last module not instantiated by any
+/// other module. If every module is instantiated (a cycle), falls
+/// back to the last module — elaboration will then report the cycle.
+fn pick_top(modules: &[Module]) -> usize {
+    let instantiated: HashSet<&str> = modules
+        .iter()
+        .flat_map(|m| m.mod_instances.iter())
+        .map(|mi| mi.module_name.as_str())
+        .collect();
+    modules
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, m)| !instantiated.contains(m.name.as_str()))
+        .map(|(i, _)| i)
+        .unwrap_or(modules.len() - 1)
 }
 
 fn build_module(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> Module {
@@ -57,6 +94,7 @@ fn build_module(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> Modu
     let mut ports: Vec<Port> = Vec::new();
     let mut wires: Vec<WireDecl> = Vec::new();
     let mut instances: Vec<GateInst> = Vec::new();
+    let mut mod_instances: Vec<ModuleInst> = Vec::new();
 
     for inner in pair.into_inner() {
         match inner.as_rule() {
@@ -86,6 +124,9 @@ fn build_module(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> Modu
             Rule::always_block => {
                 instances.extend(build_always_block(inner, file, source));
             }
+            Rule::module_inst => {
+                mod_instances.push(build_module_inst(inner, file, source));
+            }
             _ => {}
         }
     }
@@ -95,6 +136,46 @@ fn build_module(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> Modu
         ports,
         wires,
         instances,
+        mod_instances,
+        span,
+    }
+}
+
+/// Build one `module_inst` — `<module> <inst>(.port(net), ...)`. The
+/// rule yields two leading `ident`s (module name, instance name) then
+/// a `conn_list`.
+fn build_module_inst(pair: Pair<'_, Rule>, file: &Arc<PathBuf>, source: &str) -> ModuleInst {
+    let span = make_span(&pair, file, source);
+    let mut idents: Vec<Ident> = Vec::new();
+    let mut connections: Vec<Connection> = Vec::new();
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::ident => idents.push(make_ident(inner, file, source)),
+            Rule::conn_list => {
+                for conn_pair in inner.into_inner() {
+                    if matches!(conn_pair.as_rule(), Rule::conn) {
+                        connections.push(build_conn(conn_pair, file, source));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let module_name = idents
+        .first()
+        .cloned()
+        .unwrap_or_else(|| placeholder_ident("<missing>", file, source, &span));
+    let inst_name = idents
+        .get(1)
+        .cloned()
+        .unwrap_or_else(|| placeholder_ident("<missing>", file, source, &span));
+
+    ModuleInst {
+        module_name,
+        inst_name,
+        connections,
         span,
     }
 }

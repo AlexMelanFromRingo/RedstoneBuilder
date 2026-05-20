@@ -249,3 +249,81 @@ fn bus_wire_decl_expands_to_width() {
         .collect();
     assert_eq!(bus_nets.len(), 4, "got {bus_nets:?}");
 }
+
+#[test]
+fn hierarchical_design_elaborates_to_flat_top() {
+    let (src, path) = read_fixture("hier_adder.hdl");
+    let module = parse(&src, &path).expect("parse + elaborate hier_adder.hdl");
+
+    // Top is adder2; both full_adder instances inlined.
+    assert_eq!(module.name.as_str(), "adder2");
+    assert!(
+        module.mod_instances.is_empty(),
+        "elaboration must leave no sub-module instances"
+    );
+    // 2 full_adders × 5 gates each = 10 flattened gates.
+    assert_eq!(
+        module.instances.len(),
+        10,
+        "gates: {}",
+        module.instances.len()
+    );
+
+    // Sub-module internal nets are prefixed with the instance name.
+    let gate_names: Vec<&str> = module
+        .instances
+        .iter()
+        .map(|g| g.inst_name.as_str())
+        .collect();
+    assert!(gate_names.contains(&"fa0.x1"), "names: {gate_names:?}");
+    assert!(gate_names.contains(&"fa1.o1"), "names: {gate_names:?}");
+
+    // The carry net `c1` declared in adder2 binds fa0.cout → fa1.cin.
+    let fa0_o1 = module
+        .instances
+        .iter()
+        .find(|g| g.inst_name.as_str() == "fa0.o1")
+        .expect("fa0.o1 exists");
+    let y = fa0_o1
+        .connections
+        .iter()
+        .find(|c| c.port.as_str().eq_ignore_ascii_case("Y"))
+        .expect("fa0.o1 has .Y");
+    assert_eq!(y.net.as_str(), "c1", "fa0 cout must bind to parent net c1");
+
+    validate(&module, &src).expect("elaborated hier_adder validates clean");
+}
+
+#[test]
+fn unknown_submodule_is_an_elaboration_error() {
+    let src = r#"
+        module top(input a, output y);
+            missing_mod u(.in(a), .out(y));
+        endmodule
+    "#;
+    let path = std::path::PathBuf::from("bad_hier.hdl");
+    let err = parse(src, &path).expect_err("unknown submodule must fail");
+    let report = miette::Report::new(err);
+    let s = format!("{report:?}");
+    assert!(
+        s.contains("elaboration") || s.contains("unknown module"),
+        "expected elaboration error, got: {s}"
+    );
+}
+
+#[test]
+fn recursive_instantiation_is_rejected() {
+    let src = r#"
+        module loop_a(input a, output y);
+            loop_a inner(.a(a), .y(y));
+        endmodule
+    "#;
+    let path = std::path::PathBuf::from("recursive.hdl");
+    let err = parse(src, &path).expect_err("recursion must fail");
+    let report = miette::Report::new(err);
+    let s = format!("{report:?}");
+    assert!(
+        s.contains("recursive") || s.contains("elaboration"),
+        "expected recursion error, got: {s}"
+    );
+}

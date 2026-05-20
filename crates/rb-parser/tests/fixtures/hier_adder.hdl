@@ -1,0 +1,19 @@
+// V3.P5 hierarchical fixture: a 2-bit adder built from two instances
+// of a 1-bit full_adder sub-module. Elaboration inlines both.
+module full_adder(input a, input b, input cin, output sum, output cout);
+    wire ab, ab_cin, ab_and;
+    xor x1(.A(a), .B(b), .Y(ab));
+    xor x2(.A(ab), .B(cin), .Y(sum));
+    and a1(.A(a), .B(b), .Y(ab_and));
+    and a2(.A(ab), .B(cin), .Y(ab_cin));
+    or  o1(.A(ab_and), .B(ab_cin), .Y(cout));
+endmodule
+
+module adder2(
+    input a0, input a1, input b0, input b1, input cin,
+    output s0, output s1, output cout
+);
+    wire c1;
+    full_adder fa0(.a(a0), .b(b0), .cin(cin), .sum(s0), .cout(c1));
+    full_adder fa1(.a(a1), .b(b1), .cin(c1), .sum(s1), .cout(cout));
+endmodule

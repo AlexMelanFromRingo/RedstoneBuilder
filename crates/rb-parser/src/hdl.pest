@@ -8,7 +8,9 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 COMMENT    = _{ "//" ~ (!"\n" ~ ANY)* | "/*" ~ (!"*/" ~ ANY)* ~ "*/" }
 
-file = { SOI ~ module_decl ~ EOI }
+// v3: a file may hold several module definitions; the last module not
+// instantiated by any other is the elaboration top.
+file = { SOI ~ module_decl+ ~ EOI }
 
 module_decl = {
     kw_module ~ ident ~ "(" ~ port_list ~ ")" ~ ";"
@@ -20,7 +22,12 @@ port_list = { port_decl ~ ("," ~ port_decl)* }
 port_decl = { port_dir ~ wire_kind? ~ bus_spec? ~ ident }
 port_dir  = { kw_input | kw_output }
 
-module_item = _{ wire_decl | gate_inst | comparator_inst | observer_inst | always_block }
+module_item = _{ wire_decl | gate_inst | comparator_inst | observer_inst | always_block | module_inst }
+
+// v3: instantiate another module — `<module> <inst>(.port(net), ...)`.
+// Tried last in module_item: every other item starts with a keyword,
+// so a plain-identifier-first statement is unambiguously a module_inst.
+module_inst = { ident ~ ident ~ "(" ~ conn_list ~ ")" ~ ";" }
 
 // v3: `wire X;` (scalar) or `wire [3:0] X;` (4-bit bus). A bus
 // desugars in the parser into one scalar net per bit, named `X[i]`.

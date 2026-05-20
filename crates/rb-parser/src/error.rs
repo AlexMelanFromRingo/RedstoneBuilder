@@ -37,6 +37,21 @@ pub enum ParseError {
         src: NamedSource<String>,
     },
 
+    /// Hierarchical elaboration failed — an unknown sub-module, a
+    /// recursive instantiation, or a port-binding mismatch (v3).
+    #[error("elaboration error: {message}")]
+    #[diagnostic(code(rb_parser::elaboration))]
+    Elaboration {
+        /// Human-readable description of the elaboration failure.
+        message: String,
+        /// Span of the offending instantiation / module.
+        #[label("here")]
+        at: MietteSpan,
+        /// Source code, for the rendered snippet.
+        #[source_code]
+        src: NamedSource<String>,
+    },
+
     /// Filesystem error reading the source file.
     #[error("could not read source file: {0}")]
     Io(#[from] std::io::Error),
