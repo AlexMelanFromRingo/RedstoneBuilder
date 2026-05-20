@@ -75,3 +75,46 @@ fn hierarchical_adder4_compiles_end_to_end() {
     );
     std::fs::remove_file(&out).ok();
 }
+
+/// The 8-bit ALU built from eight `alu_slice` instances — a ~242-gate
+/// flattened netlist. `#[ignore]` because PathFinder routing of a
+/// design this size runs for several minutes; run manually with
+/// `cargo test --release ... -- --ignored`.
+#[ignore]
+#[test]
+fn hierarchical_alu8_compiles_at_scale() {
+    let example = workspace_root().join("examples/alu_8bit_hier.hdl");
+    let out = temp_output("alu8");
+
+    let output = Command::new(binary())
+        .arg(&example)
+        .arg("-o")
+        .arg(&out)
+        .arg("--router")
+        .arg("pathfinder")
+        .arg("--max-footprint")
+        .arg("512x48x512")
+        .output()
+        .expect("spawn");
+
+    assert!(
+        output.status.success(),
+        "non-zero exit: {:?}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let mut bytes = Vec::new();
+    std::fs::File::open(&out)
+        .expect("open")
+        .read_to_end(&mut bytes)
+        .expect("read");
+    let root = rb_nbt::decode_from_bytes(&bytes).expect("decode");
+    assert_eq!(root.metadata.name, "alu_8bit_hier");
+    assert!(
+        root.metadata.total_blocks > 10_000,
+        "expected a large schematic for the 8-bit ALU, got {} blocks",
+        root.metadata.total_blocks
+    );
+    std::fs::remove_file(&out).ok();
+}

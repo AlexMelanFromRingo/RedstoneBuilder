@@ -32,6 +32,25 @@ v2 (epic `002-v2-analog-scale`) adds:
 
 See **[specs/002-v2-analog-scale/quickstart.md](specs/002-v2-analog-scale/quickstart.md)**.
 
+## v3 highlights
+
+v3 (epic `003-compose-from-stubs`) adds:
+
+- **Multi-bit buses**: `wire [3:0] x;`, `input [7:0] a`, bit indexing
+  `x[2]` — desugared to per-bit scalar nets in the parser.
+- **Hierarchical HDL**: a file may define several modules and
+  instantiate one inside another (`full_adder fa0(.a(x), ...);`). The
+  elaborator flattens the hierarchy before synthesis.
+- **PathFinder routing at scale**: parallel A* + negotiated congestion
+  compiles `examples/alu_8bit_hier.hdl` — an 8-bit ALU flattened to
+  ~242 gates — end-to-end.
+- **Stub library** (`rb-stubs`, experimental): load hand-built `.schem`
+  gate primitives and compose them with the router.
+
+Worked examples: `examples/adder4_hier.hdl` (hierarchical 4-bit adder),
+`examples/alu_4bit_bus.hdl` (bus-syntax ALU), `examples/alu_8bit_hier.hdl`
+(8-bit ALU from a reusable 1-bit slice).
+
 ## Repository layout
 
 This is a Cargo workspace with six crates:
